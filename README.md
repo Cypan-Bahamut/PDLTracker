@@ -40,6 +40,4 @@ No configuration required — it starts working on your first engaged target.
 Position is saved automatically when you drag the window.
 
 ## Credits
-Built by Cypan (Bahamut). Debuff-tracking lineage: Debuffed by Xathe.
-Attack modifier / pDIF math per bg-wiki's PDIF documentation and community
-testing. Share freely.
+Built by Cypan (Bahamut).
