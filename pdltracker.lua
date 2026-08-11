@@ -44,7 +44,10 @@ defaults.flags = { draggable = true }
 defaults.visible = true
 defaults.base_ratio = 1.10
 defaults.base_attack = 1500
-defaults.aria_pdl = 0.16
+-- Aria PDL by the bard's Songs+ bonus (bg-wiki):
+--   +2=15.6% +3=16.9% +4=18.2% +5=19.5% +6=20.8% +7=22.1%
+-- Set to your bard's gear (//pdl save persists it). Soul Voice doubles.
+defaults.aria_pdl = 0.195
 defaults.autocheck = true
 defaults.debug = false
 
@@ -97,23 +100,30 @@ local pdl_config = {
     -- job's primary weapon class, from VERIFIED bg-wiki PDIF caps + Damage
     -- Limit+ trait tiers at 99: onset = noncrit_cap + trait - 0.375, with a
     -- small lead for WS attack ftp / crits.
-    --   1H (dagger/sword/axe/katana/club) cap 3.25 | H2H & GKT 3.5
-    --   2H (GS/GA/polearm/staff) 3.75 | Scythe 4.0
-    --   Trait at 99: I +0.10 (THF/NIN/RDM) II +0.20 (DNC/BST/PUP/WAR/SAM)
-    --   III +0.30 (MNK/DRG/RNG) V +0.50 (DRK)
-    thresholds  = { DNC=3.00, THF=2.90, NIN=2.90, BST=3.00, BLU=2.85,
-                    BRD=2.85, RDM=2.95, MNK=3.40, PUP=3.30,
-                    SAM=3.425,  -- GK cap 3.6 + tier II 0.2 - 0.375 (Cy page quote)
-                    WAR=3.55, DRG=3.60, RUN=3.35, DRK=4.10 },
-    threshold_default = 3.0,   -- fallback for unlisted jobs
+    -- Job FALLBACK thresholds (used when the equipped weapon can't be
+    -- resolved): canonical weapon per job, PDIF-page caps + trait - 0.375.
+    thresholds  = { DNC=3.075, THF=2.975, NIN=2.975, BST=3.075, BLU=2.875,
+                    BRD=2.875, RDM=2.975, MNK=3.425, PUP=3.325, SAM=3.325,
+                    WAR=3.575, DRG=3.675, RUN=3.375, DRK=4.125 },
+    threshold_default = 3.075, -- 1H + tier II, fallback for unlisted jobs
+    -- Pre-randomizer pDIF caps by WEAPON SKILL (bg-wiki PDIF page, Cy pull
+    -- Aug 2026). Onset threshold = cap + Damage Limit trait - 0.375, where
+    -- 0.375 is the randomizer upper-spread constant (same page: wRatio>=1.5
+    -- band, UL = wRatio + 0.375).
+    skill_caps = { [1]=3.5,  [2]=3.25, [3]=3.25, [4]=3.75, [5]=3.25,
+                   [6]=3.75, [7]=4.0,  [8]=3.75, [9]=3.25, [10]=3.5,
+                   [11]=3.25, [12]=3.75 },
+    -- H2H | Dagger | Sword | GS | Axe | GA | Scythe | Polearm | Katana |
+    -- GKT | Club | Staff
+    -- Main-job Damage Limit trait value at 99 (his trait-page pull, Aug 2026)
+    main_trait = { DNC=0.2, THF=0.1, NIN=0.1, BST=0.2, BLU=0, BRD=0,
+                   RDM=0.1, MNK=0.3, PUP=0.2, SAM=0.2, WAR=0.2, DRG=0.3,
+                   RNG=0.3, DRK=0.5, RUN=0, WHM=0, BLM=0, SCH=0, GEO=0,
+                   SMN=0, COR=0, PLD=0 },
     -- Aria of Passion: PDL% multiplicative with the pDIF cap (VERIFIED
     -- bg-wiki PDIF page). Potency ~15-20% by the bard's +All Songs gear
     -- (FFXIclopedia testing; +3 ~ +16%); Soul Voice doubles (auto-detected
     -- via the existing SV look-back on the singing bard).
-    -- Aria PDL by the bard's Songs+ bonus (Cy/bg-wiki, Aug 2026):
-    --   +2=15.6%% +3=16.9%% +4=18.2%% +5=19.5%% +6=20.8%% +7=22.1%%
-    -- Set to your bard's actual gear; +5 default. Soul Voice doubles.
-    aria_pdl = 0.195,
     -- Damage Limit tier I via SUB job (+26/256 ~ +0.10 to the cap), granted
     -- when sub level reaches the trait level; lifts thresholds only for
     -- mains with no native Damage Limit trait.
@@ -121,7 +131,6 @@ local pdl_config = {
                            BST=45, PUP=45, DNC=45, THF=50, NIN=50, RDM=60 },
     no_trait_mains = { BRD=true, BLU=true, RUN=true, SCH=true, SMN=true,
                        BLM=true, WHM=true, GEO=true, COR=true, PLD=true },
-    base_ratio  = 1.10,  -- overridden by settings.base_ratio at runtime
 
     ------------------------------------------------------------------
     -- Attack-side buff values (applied when the buff is on YOU)
@@ -224,13 +233,11 @@ local pdl_config = {
     dia3_player_mult = 1.5,
     defense_floor  = 0.95,       -- defense floors at 1 in-game
     tp_sample_int  = 0.5,
-    debug          = false,
 
     ------------------------------------------------------------------
     -- /check calibration (dynamic path for checkable mobs; ITG NMs
     -- [message 249] stay on the static base_ratio path)
     ------------------------------------------------------------------
-    autocheck      = true,   -- auto /check each new engaged target once
     check_hi_cap   = 8.0,    -- upper bound stand-in for the open low-def bracket
     -- Representative naked-low edge when 'low defense' shows, by toughness
     -- rating (1=Too weak .. 8=Incredibly tough). Rating field is read from
@@ -1090,10 +1097,30 @@ end
 -- Threshold for the CURRENT job state. Base per-job onset (main-job trait
 -- baked in), lifted by: sub-job Damage Limit tier I on no-trait mains, and
 -- Aria of Passion (PDL multiplies the cap: thr' = (thr+0.375)*(1+pdl)-0.375).
+local function pdl_weapon_cap()
+    -- equipped main weapon via item id (no GearSwap player table here)
+    local eq = windower.ffxi.get_items and windower.ffxi.get_items()
+    local slot = eq and eq.equipment and eq.equipment.main
+    local bag  = eq and eq.equipment and eq.equipment.main_bag
+    if not slot or slot == 0 then return nil end
+    local bagt = windower.ffxi.get_items(bag or 0)
+    local it   = bagt and bagt[slot]
+    local id   = it and it.id
+    local rit  = id and id > 0 and res.items and res.items[id]
+    local sk   = rit and rit.skill
+    return sk and pdl_config.skill_caps[sk] or nil
+end
+
 function pdl_threshold()
     local plr = P()
     local job = plr and plr.main_job
-    local thr = (job and pdl_config.thresholds[job]) or pdl_config.threshold_default
+    local thr
+    local cap = pdl_weapon_cap()
+    if cap and job then
+        thr = cap + (pdl_config.main_trait[job] or 0) - 0.375
+    else
+        thr = (job and pdl_config.thresholds[job]) or pdl_config.threshold_default
+    end
     if job and pdl_config.no_trait_mains[job] then
         local sj = plr and plr.sub_job
         local sl = plr and plr.sub_job_level
