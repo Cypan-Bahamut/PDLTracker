@@ -53,3 +53,12 @@ Position is saved automatically when you drag the window.
 Built by Cypan (Bahamut). Debuff-tracking lineage: Debuffed by Xathe.
 Attack modifier / pDIF math per bg-wiki's PDIF documentation and community
 testing. Share freely.
+
+## Support
+
+First and foremost: Please support the original author if this is an addon modification. 
+If you enjoy the addon and you'd like to buy me a coffee, it's appreciated but never expected:
+
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-cypan-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/cypan)
+
+Bug reports and pull requests are worth more than donations, so open an issue if something's broken please.
