@@ -102,14 +102,18 @@ local pdl_config = {
     --   Trait at 99: I +0.10 (THF/NIN/RDM) II +0.20 (DNC/BST/PUP/WAR/SAM)
     --   III +0.30 (MNK/DRG/RNG) V +0.50 (DRK)
     thresholds  = { DNC=3.00, THF=2.90, NIN=2.90, BST=3.00, BLU=2.85,
-                    BRD=2.85, RDM=2.95, MNK=3.40, PUP=3.30, SAM=3.30,
+                    BRD=2.85, RDM=2.95, MNK=3.40, PUP=3.30,
+                    SAM=3.425,  -- GK cap 3.6 + tier II 0.2 - 0.375 (Cy page quote)
                     WAR=3.55, DRG=3.60, RUN=3.35, DRK=4.10 },
     threshold_default = 3.0,   -- fallback for unlisted jobs
     -- Aria of Passion: PDL% multiplicative with the pDIF cap (VERIFIED
     -- bg-wiki PDIF page). Potency ~15-20% by the bard's +All Songs gear
     -- (FFXIclopedia testing; +3 ~ +16%); Soul Voice doubles (auto-detected
     -- via the existing SV look-back on the singing bard).
-    aria_pdl = 0.16,
+    -- Aria PDL by the bard's Songs+ bonus (Cy/bg-wiki, Aug 2026):
+    --   +2=15.6%% +3=16.9%% +4=18.2%% +5=19.5%% +6=20.8%% +7=22.1%%
+    -- Set to your bard's actual gear; +5 default. Soul Voice doubles.
+    aria_pdl = 0.195,
     -- Damage Limit tier I via SUB job (+26/256 ~ +0.10 to the cap), granted
     -- when sub level reaches the trait level; lifts thresholds only for
     -- mains with no native Damage Limit trait.
@@ -167,6 +171,9 @@ local pdl_config = {
                                  -- x2 for a full-duration-geared GEO
     frailty_sylvie_pct = 0.125,  -- VERIFIED Sylvie Entrust Indi-Frailty
     frailty_sylvie_dur = 180,    -- resources base duration (Sylvie: no gear)
+    -- Sheol Gaol: offensive Geomancy -85%% on the gaol bosses. Detected by
+    -- BOSS NAME (Cy ruling, Aug 2026) -- see SHEOL_GAOL_BOSSES below.
+    sheol_gaol_geo_mult = 0.15,
 
     ------------------------------------------------------------------
     -- Debuff potencies (VERIFIED bg-wiki unless noted)
@@ -177,6 +184,44 @@ local pdl_config = {
     daze_per_lvl   = 0.02,       -- per level after
     daze_dur       = 120,        -- fallback; 0x029 wear-off is authoritative
 
+    -- ---- Enemy DEFENSE UP (mob self-buffs) ----------------------------
+    -- Combined ADDITIVELY with defense-down (net = down - up), matching the
+    -- community convention for defense modifiers. ASSUMPTION: flag for
+    -- field verification if numbers ever look off.
+    defup_moves = {                  -- pct by move name; SELF-buffs only
+        -- source: bg-wiki Jug Pets page (Cy pull, Aug 2026), per-pet tables:
+        -- '+N% Defense for pet and Beastmaster. Duration varies with TP.'
+        ['Scissor Guard'] = 1.00,
+        ['Water Wall']    = 1.00,
+        ['Harden Shell']  = 0.50,
+        ['Cocoon']        = 0.50,    -- long-established crab/BLU value
+    },
+    -- Mob SELF defense-down moves (Rage-type: attack up, own defense down)
+    -- -> tracked as a defense-down GAIN on the mob; PDL-positive.
+    selfdefdown_moves = {
+        ['Rage'] = 0.50,             -- same page: '+50% Attack & -50% Defense'
+    },
+    selfdefdown_default = 0.25,
+    -- Unidentified Defense Down landings on the mob (bolt/weapon procs):
+    -- bolt-class values from the Defense Down page
+    defdown_generic_pct = 0.125,
+    defdown_generic_dur = 60,  -- unknown self def-down: assume LOW
+                                 -- (understating helps PDL later = safe)
+    defup_default_pct = 0.50,  -- unknown Defense Boost move: assume GENEROUS
+                               -- (overstating their defense delays PDL = the
+                               -- safe error direction)
+    defup_default_dur = 60,    -- standard 1 min (Cy/FFXIclopedia, Aug 2026)
+    -- Protect/Protectra base flat defense per tier (bg-wiki, Cy Aug 2026)
+    protect_flat = { [43]=20,  [44]=50,  [45]=90,  [46]=140, [47]=220,
+                     [125]=20, [126]=50, [127]=90, [128]=140, [129]=220 },
+    protect_dur  = 1800,
+    -- Dia duration = base (60/120/180, from spell resources) x this. Raise
+    -- for a geared endgame caster once their duration bonus is known.
+    dia_dur_mult = 1.0,
+    -- Dia III player-cast duration: '50%% waypoint between base and endgame
+    -- enfeebling-duration gear' (Cy). Implemented as 1.5x assuming endgame
+    -- ~2x base; adjust this one number if that assumption is off.
+    dia3_player_mult = 1.5,
     defense_floor  = 0.95,       -- defense floors at 1 in-game
     tp_sample_int  = 0.5,
     debug          = false,
@@ -210,6 +255,12 @@ local WS_DEFDOWN = {
     ['Armor Break']   = { pct = 0.25,  dur = tp_scaled_dur },
     ['Full Break']    = { pct = 0.125, dur = tp_scaled_dur },
     ['Shell Crusher'] = { pct = 0.25,  dur = tp_scaled_dur },
+    -- bg-wiki Defense Down page (Cy pull, Aug 2026):
+    ['Garland of Bliss']  = { pct = 0.125, dur = function(tp)
+        tp = math.max(1000, math.min(tp or 1000, 3000))
+        return 60 + 120 * ((tp - 1000) / 2000)         -- 1-3 min TP-scaled
+    end },
+    ['Metatron Torment']  = { pct = 0.1875, dur = function(_) return 120 end },
     ['Tachi: Ageha']  = { pct = 0.25,  dur = function(_) return 180 end },
 }
 
@@ -364,10 +415,60 @@ end
 --------------------------------------------------------------------------------
 -- Appliers
 --------------------------------------------------------------------------------
-local function apply_dia(target, tier)
+-- Enemy self-buff tracking: Defense Boost (status 93) and Protect (status 40)
+local MSG_GAIN      = { [166]=true, [186]=true, [194]=true, [205]=true,
+                        [230]=true, [266]=true, [280]=true, [319]=true }
+local BUFF_DEFBOOST = 93   -- VERIFIED resources/buffs.lua
+local BUFF_PROTECT  = 40   -- VERIFIED resources/buffs.lua
+local res_ma = (res and res.monster_abilities) or {}
+-- Sheol Gaol bosses (Cy, Aug 2026): offensive Geomancy -85%% on these.
+-- Atonement 1-4 complete set; name-matched at defense-computation time.
+local SHEOL_GAOL_BOSSES = {
+    ['Dealan-dhe']=true, ['Sgili']=true, ['U Bnai']=true, ['Gogmagog']=true,
+    ['Aristaeus']=true, ['Raskovniche']=true, ['Marmorkrebs']=true,
+    ['Gigelorum']=true, ['Procne']=true, ['Henwen']=true,
+    ['Xevioso']=true, ['Ngai']=true, ['Kalunga']=true, ['Ongo']=true,
+    ['Mboze']=true, ['Arebati']=true, ['Bumba']=true,
+}
+
+local MSG_AFFLICT = { [236]=true, [237]=true }  -- VERIFIED action_messages
+-- bg-wiki Defense Down page (Cy pull, Aug 2026): pct, duration (midpoints)
+local DEFDOWN_SPELLS = {   -- Blue Magic, by spell name
+    ['Benthic Typhoon']={0.10,30},  ['Bilgestorm']={0.25,45},
+    ['Corrosive Ooze']={0.05,75},   ['Enervation']={0.10,30},
+    ['Frightful Roar']={0.10,180},  ['Seedspray']={0.08,105},
+    ['Sweeping Gouge']={0.15,90},   ['Tenebral Crush']={0.20,180},
+    ['Tourbillion']={0.33,105},
+}
+local DEFDOWN_PETMOVES = { -- BST pet ready moves, by move name
+    ['Corrosive Ooze']={0.33,77},   ['Rhinowrecker']={0.25,60},
+    ['Sweeping Gouge']={0.25,60},   ['Swooping Frenzy']={0.25,105},
+    ['Tortoise Stomp']={0.25,155},
+}
+
+local function pdl_protect_flat(mob_id)
+    local m = mobs[mob_id]
+    if m and m.protect and m.protect.expires > os.clock() then
+        return m.protect.flat
+    end
+    return 0
+end
+
+local function apply_dia(target, tier, caster_id)
     local m = mob_entry(target)
     if m.dia and live(m.dia) and m.dia.tier > tier then return end
-    local dur = ({ [1]=60, [2]=120, [3]=180 })[tier]  -- VERIFIED resources
+    -- Duration policy (Cy ruling, Aug 2026): Dia III from a PLAYER assumes
+    -- the 50%% waypoint of endgame enfeebling-duration gear; Dia III from a
+    -- TRUST (NPC-range actor id < 0x01000000) assumes job base; Dia I/II
+    -- assume no duration gear. Any renewal cast resets the timer (the
+    -- overwrite below does exactly that).
+    local mult = 1.0
+    if tier == 3 then
+        local is_npc = caster_id and caster_id < 0x01000000
+        mult = is_npc and 1.0 or pdl_config.dia3_player_mult
+    end
+    local dur = (({ [1]=60, [2]=120, [3]=180 })[tier])  -- VERIFIED resources
+                * mult * pdl_config.dia_dur_mult
     m.dia = { tier=tier,
               shot=(m.dia and live(m.dia) and m.dia.tier==tier)
                    and m.dia.shot or false,
@@ -388,10 +489,12 @@ local function apply_daze(target, level)
 end
 
 local function apply_defdown(target, name, pct, dur)
+    -- 149-family application overwrites Defense Boost (mutual-overwrite rule)
     local m = mob_entry(target)
     if m.defdown and live(m.defdown) and m.defdown.pct > pct then return end
     m.defdown = { name=name, pct=pct, expires=os.clock()+dur,
                   status=DEFDOWN_STATUS }
+    m.defup = nil
     dbg('%s (%.1f%%) on %d for %ds', name, pct*100, target, dur)
 end
 
@@ -417,7 +520,10 @@ local function on_action(act)
     -- Light Shot (Debuffed: category 6, param 131)
     if act.category == 6 and act.param == 131 then
         local m = mobs[t1.id]
-        if m and live(m.dia) then m.dia.shot = true end
+        if m and live(m.dia) then
+            m.dia.shot = true   -- potency only; Quick Draw does NOT extend
+                                -- duration (Cy ruling, Aug 2026)
+        end
         return
     end
 
@@ -427,6 +533,77 @@ local function on_action(act)
             apply_daze(t1.id, a1.param or 1)
         end
         return
+    end
+
+
+    -- Defense Down landing on the MOB from any actor: BLU spells, pet
+    -- moves, bolt/weapon procs. (WS-family stays on its precise landed-
+    -- message path: 185/187 are not in these sets, so no double-apply.)
+    if (MSG_GAIN[a1.message] or MSG_AFFLICT[a1.message])
+       and a1.param == DEFDOWN_STATUS
+       and t1.id ~= act.actor_id
+       and not party_jobs[t1.id] and t1.id ~= player_id then
+        local nm, ent
+        if act.category == 4 then
+            local sp = res.spells and res.spells[act.param]
+            nm = sp and sp.en
+            ent = nm and DEFDOWN_SPELLS[nm]
+        else
+            local ma = res_ma[act.param]
+                       or (res.job_abilities and res.job_abilities[act.param])
+            nm = ma and ma.en
+            ent = nm and DEFDOWN_PETMOVES[nm]
+        end
+        local pct = (ent and ent[1]) or pdl_config.defdown_generic_pct
+        local dur = (ent and ent[2]) or pdl_config.defdown_generic_dur
+        local m = mob_entry(t1.id)
+        if not (m.defdown and live(m.defdown) and m.defdown.pct >= pct) then
+            m.defdown = { name = nm or 'proc', pct = pct,
+                          status = DEFDOWN_STATUS,
+                          expires = os.clock() + dur }
+            m.defup = nil
+            dbg('defdown landed on %d: %s -%d%% (%ds)',
+                t1.id, nm or 'proc', pct * 100, dur)
+        end
+        return
+    end
+
+    -- Enemy self-buffs: Defense Boost / Protect gains on the mob
+    if MSG_GAIN[a1.message] and t1.id == act.actor_id
+       and not party_jobs[t1.id] and t1.id ~= player_id then
+        if a1.param == BUFF_DEFBOOST then
+            local ma = res_ma[act.param]
+            local mname = ma and ma.en
+            local pct = (mname and pdl_config.defup_moves[mname])
+                        or pdl_config.defup_default_pct
+            local m = mob_entry(t1.id)
+            m.defup = { pct = pct,
+                        expires = os.clock() + pdl_config.defup_default_dur }
+            -- Defense Boost OVERWRITES a Defense Down effect (149 family
+            -- only -- Dia/steps/Frailty are unaffected) and vice versa
+            m.defdown = nil
+            dbg('defup on %d: %s +%d%%', t1.id, mname or 'unknown', pct * 100)
+            return
+        elseif a1.param == DEFDOWN_STATUS then
+            -- Rage-type self defense-down: the mob lowered its own defense
+            local ma = res_ma[act.param]
+            local mname = ma and ma.en
+            local pct = (mname and pdl_config.selfdefdown_moves[mname])
+                        or pdl_config.selfdefdown_default
+            local m = mob_entry(t1.id)
+            m.defdown = { name = mname or 'self', pct = pct, status = DEFDOWN_STATUS,
+                          expires = os.clock() + pdl_config.defup_default_dur }
+            m.defup = nil
+            dbg('self-defdown on %d: %s -%d%%', t1.id, mname or 'unknown', pct * 100)
+            return
+        elseif a1.param == BUFF_PROTECT then
+            local m = mob_entry(t1.id)
+            m.protect = { flat = pdl_config.protect_flat[act.param] or 0,
+                          expires = os.clock() + pdl_config.protect_dur }
+            dbg('protect on %d: spell %s flat %d', t1.id,
+                tostring(act.param), m.protect.flat)
+            return
+        end
     end
 
     -- Frailty casts FIRST within category 4: matched by spell id regardless of
@@ -492,7 +669,7 @@ local function on_action(act)
     if act.category == 4 and SPELL_LAND_MSGS[a1.message] then
         local sid = act.param
         if DIA_TIER[sid] then
-            apply_dia(t1.id, DIA_TIER[sid])
+            apply_dia(t1.id, DIA_TIER[sid], act.actor_id)
         elseif BIO_IDS[sid] then
             apply_bio(t1.id)
         end
@@ -511,6 +688,21 @@ local function on_action(act)
         elseif settings.debug and ws then
             dbg('WS %s msg=%d param=%d (unmatched)', ws.en, a1.message,
                 a1.param or -1)
+        end
+        return
+    end
+
+    -- Spirit-Surged Jump (SELF only -- own buffs are knowable): Jump under
+    -- Spirit Surge lands Defense Down -20%% for 60s (bg-wiki, Cy Aug 2026)
+    if act.category == 6 and act.param == 66 and act.actor_id == player_id then
+        local plss = windower.ffxi.get_player()
+        if plss and plss.buffs then
+            for i = 1, #plss.buffs do
+                if plss.buffs[i] == 126 then   -- Spirit Surge status
+                    apply_defdown(t1.id, 'SS-Jump', 0.20, 60)
+                    break
+                end
+            end
         end
         return
     end
@@ -556,6 +748,7 @@ end
 -- Action message handling (0x029): same message sets as both source addons
 --------------------------------------------------------------------------------
 local DEATH_MSGS   = set_of{6, 20, 113, 406, 605, 646}
+
 local WEAROFF_MSGS = set_of{64, 204, 206, 350, 531}
 
 local function on_action_message(target_id, status_param, message_id)
@@ -567,6 +760,8 @@ local function on_action_message(target_id, status_param, message_id)
         if m.dia     and m.dia.status     == status_param then m.dia     = nil end
         if m.daze    and m.daze.status    == status_param then m.daze    = nil end
         if m.defdown and m.defdown.status == status_param then m.defdown = nil end
+        if status_param == BUFF_DEFBOOST then m.defup   = nil end
+        if status_param == BUFF_PROTECT  then m.protect = nil end
     end
 end
 
@@ -621,8 +816,9 @@ local function handle_check(target, message_id, p1, p2)
     -- With measured attack these are absolute; checks at different states
     -- (especially WEAKER ones) intersect the bounds tighter.
     local eff = math.max(1 - dd, 0.05)
-    local dlo = A / (hi * eff)
-    local dhi = A / (lo * eff)
+    local pflat = pdl_protect_flat(target)
+    local dlo = math.max(A / (hi * eff) - pflat, 1)
+    local dhi = math.max(A / (lo * eff) - pflat, 1)
     local c = m.cal
     if c then
         c.def_lo, c.def_hi = math.max(c.def_lo, dlo), math.min(c.def_hi, dhi)
@@ -757,7 +953,7 @@ end)
 function pdl_get_defense_down(mob_id)
     local now = os.clock()
     local m   = mobs[mob_id]
-    local b   = { dia=0, step=0, defdown=0, frailty=0 }
+    local b   = { dia=0, step=0, defdown=0, frailty=0, defup=0 }
 
     if m then
         if live(m.dia) then
@@ -771,13 +967,22 @@ function pdl_get_defense_down(mob_id)
         if live(m.defdown) then
             b.defdown = m.defdown.pct
         end
+        if m.defup and m.defup.expires > now then
+            b.defup = m.defup.pct
+        end
     end
     if frailty.active and frailty.expires > now then
         b.frailty = frailty.pct
+        local mb = windower.ffxi.get_mob_by_id
+                   and windower.ffxi.get_mob_by_id(mob_id)
+        if mb and SHEOL_GAOL_BOSSES[mb.name] then
+            b.frailty = b.frailty * pdl_config.sheol_gaol_geo_mult
+        end
     end
 
     local total = math.min(b.dia + b.step + b.defdown + b.frailty,
                            pdl_config.defense_floor)
+    total = total - (b.defup or 0)   -- net; negative = mob defense is UP
     return total, b
 end
 
@@ -865,10 +1070,13 @@ function pdl_estimated_ratio(mob_id)
     local A, measured = current_attack()
     local eff = math.max(1 - dd, 0.05)
     local m = mobs[mob_id]
-    local model_est = settings.base_ratio * (A / pdl_base_attack()) / eff
+    -- model: assumed mob defense = base_attack/base_ratio, plus any
+    -- tracked Protect flat, times the net defense percentage
+    local assumed_def = pdl_base_attack() / settings.base_ratio + pdl_protect_flat(mob_id)
+    local model_est = A / (assumed_def * eff)
     local est, mode
     if m and m.cal then
-        local floor_est = A / (m.cal.def_hi * eff)
+        local floor_est = A / ((m.cal.def_hi + pdl_protect_flat(mob_id)) * eff)
         est = math.max(floor_est, model_est)
         mode = measured and 'cal' or 'cal~'
     elseif m and m.gauge_proof then
@@ -929,6 +1137,14 @@ windower.register_event('addon command', function(cmd, a1, a2)
         settings.base_attack = tonumber(a1)
         config.save(settings)
         windower.add_to_chat(8, '[PDLTracker] buffless attack: ' .. settings.base_attack)
+    elseif cmd == 'save' then
+        local x, y = hud:pos()
+        if x and y then
+            settings.pos.x, settings.pos.y = x, y
+        end
+        config.save(settings)
+        windower.add_to_chat(8, ('[PDLTracker] position saved: %d,%d')
+            :format(settings.pos.x, settings.pos.y))
     elseif cmd == 'debug' then
         settings.debug = not settings.debug
         config.save(settings)
@@ -944,6 +1160,6 @@ windower.register_event('addon command', function(cmd, a1, a2)
             windower.add_to_chat(8, '[PDLTracker] no target')
         end
     else
-        windower.add_to_chat(8, '[PDLTracker] //pdl | //pdl base <n> | //pdl atk <n> | //pdl status | //pdl debug')
+        windower.add_to_chat(8, '[PDLTracker] //pdl | //pdl save | //pdl base <n> | //pdl atk <n> | //pdl status | //pdl debug')
     end
 end)
