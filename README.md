@@ -20,7 +20,10 @@ No configuration required — it starts working on your first engaged target.
   window's status mode shows `cal~` during fallback, `cal` once measured.
 - Tracks **enemy defense down**: Dia (+Light Shot), Box Step daze level,
   Armor Break / Full Break / Shell Crusher / Tachi: Ageha / Angon with
-  TP-scaled durations, and Frailty (Sylvie-entrust aware).
+  TP-scaled durations, and Frailty (Sylvie-entrust aware). Frailty is
+  party-filtered: casts from players outside your party/alliance are
+  ignored, and an unidentifiable caster books at Sylvie potency, not
+  the full player-GEO (Idris) assumption.
 - Tracks **enemy defense swings in both directions**: mob self-buffs
   (Scissor Guard, Water Wall, Harden Shell, Cocoon — plus a generic
   Defense Boost catch-all), mob-cast Protect/Protectra (flat, per tier),
@@ -31,9 +34,13 @@ No configuration required — it starts working on your first engaged target.
   separate and stack); Dia III duration assumes endgame gear when
   player-cast, base when trust-cast.
 - Auto-issues **/check** once per mob and converts the defense verdict into
-  bounds on the mob's base defense; re-checks automatically when your attack
-  changes materially. "Impossible to gauge" NMs use a static anchor instead.
-- Knows your **threshold**: per-job pDIF caps + Damage Limit traits (main
+  bounds on the mob's base defense, then re-checks on its own when your
+  attack shifts or when defense buffs/debuffs change on the target. Checks
+  only ever go to monsters, never a sub-targeted party member, and a check
+  that gets no response retries on its own.
+  "Impossible to gauge" NMs use a static anchor instead (`//pdl base <n>`).
+- Knows your **threshold**: the pDIF cap of the weapon you actually have
+  equipped + Damage Limit traits (main
   and qualifying sub jobs), lifted dynamically when Aria of Passion is up
   (Soul Voice doubling detected automatically).
 

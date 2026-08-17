@@ -220,6 +220,12 @@ local pdl_config = {
                                -- (overstating their defense delays PDL = the
                                -- safe error direction)
     defup_default_dur = 60,    -- standard 1 min (Cy/FFXIclopedia, Aug 2026)
+    -- Re-check pacing. A /check prints to chat, so the public build is
+    -- conservative; Cy's own build is aggressive because catching the
+    -- early-debuff window matters more than chat noise (his ruling).
+    check_timeout = 5,   -- seconds before a stranded /check retries
+    recheck_gap = 10,
+    recheck_max = 10,
     -- Protect/Protectra base flat defense per tier (bg-wiki, Cy Aug 2026)
     protect_flat = { [43]=20,  [44]=50,  [45]=90,  [46]=140, [47]=220,
                      [125]=20, [126]=50, [127]=90, [128]=140, [129]=220 },
@@ -466,12 +472,16 @@ local function apply_dia(target, tier, caster_id)
     if m.dia and live(m.dia) and m.dia.tier > tier then return end
     -- Duration policy (Cy ruling, Aug 2026): Dia III from a PLAYER assumes
     -- the 50%% waypoint of endgame enfeebling-duration gear; Dia III from a
-    -- TRUST (NPC-range actor id < 0x01000000) assumes job base; Dia I/II
+    -- TRUST (spawn_type 14) assumes job base; Dia I/II
     -- assume no duration gear. Any renewal cast resets the timer (the
     -- overwrite below does exactly that).
     local mult = 1.0
     if tier == 3 then
-        local is_npc = caster_id and caster_id < 0x01000000
+        -- Trust/fellow = spawn_type 14 (verified: Windower Trusts addon).
+        -- Unknown actor resolves as trust, the conservative direction since
+        -- the shorter duration drops Dia sooner and delays PDL.
+        local cm = caster_id and windower.ffxi.get_mob_by_id(caster_id)
+        local is_npc = (not cm) or cm.spawn_type == 14
         mult = is_npc and 1.0 or pdl_config.dia3_player_mult
     end
     local dur = (({ [1]=60, [2]=120, [3]=180 })[tier])  -- VERIFIED resources
@@ -505,7 +515,30 @@ local function apply_defdown(target, name, pct, dur)
     dbg('%s (%.1f%%) on %d for %ds', name, pct*100, target, dur)
 end
 
+local function pdl_actor_in_party(id)
+    -- true = confirmed party/alliance member; false = confirmed outsider;
+    -- nil = cannot confirm (party API unavailable). Members out of zone have
+    -- no .mob and cannot be casting nearby, so skipping them is correct.
+    if not id then return false end
+    local pt = windower.ffxi.get_party()
+    if not pt then return nil end
+    for _, mem in pairs(pt) do
+        if type(mem) == 'table' and mem.mob and mem.mob.id == id then
+            return true
+        end
+    end
+    return false
+end
+
 local function apply_frailty(pct, dur, source)
+    -- Strongest live aura wins (geomancy same-aura stacking rule; Cy ruling
+    -- Aug 2026, crab-log epoch). Equal or stronger recasts refresh the timer.
+    if frailty.active and os.clock() < frailty.expires
+       and frailty.pct > pct then
+        dbg('Frailty %.1f%% (%s) ignored: stronger %.1f%% (%s) live',
+            pct*100, source, frailty.pct*100, tostring(frailty.source))
+        return
+    end
     frailty = { active=true, pct=pct, expires=os.clock()+dur, source=source }
     dbg('Frailty %.1f%% (%s) for %ds', pct*100, source, dur)
 end
@@ -619,10 +652,22 @@ local function on_action(act)
     if act.category == 4 and FRAILTY_SPELLS[act.param] then
         local spell_name = FRAILTY_SPELLS[act.param]
         local actor      = windower.ffxi.get_mob_by_id(act.actor_id)
-        local is_sylvie  = actor and actor.name == 'Sylvie' or false
-        if is_sylvie then
+        local in_pt      = pdl_actor_in_party(act.actor_id)
+        -- Party filter (Cy directive, Aug 2026 crab log): zone outsiders'
+        -- frailty must never book (their auras are not on our mobs).
+        if actor and in_pt == false then
+            dbg('Frailty from %s ignored: not in party', actor.name)
+            return
+        end
+        -- Ambiguity nerfs DOWN to Sylvie potency (his ruling): nil actor or
+        -- unconfirmable membership books 12.5, never the Idris 41.8. Only a
+        -- resolvable, confirmed-party, non-Sylvie caster keeps the player-GEO
+        -- Idris assumption.
+        local sylvie_level = (actor and actor.name == 'Sylvie')
+                             or (not actor) or (in_pt == nil)
+        if sylvie_level then
             apply_frailty(pdl_config.frailty_sylvie_pct,
-                          pdl_config.frailty_sylvie_dur, 'Sylvie')
+                          pdl_config.frailty_sylvie_dur, 'Sylvie-level')
         else
             apply_frailty(pdl_config.frailty_player_pct,
                           pdl_config.frailty_player_dur, spell_name)
@@ -834,6 +879,7 @@ local function handle_check(target, message_id, p1, p2)
         m.cal = { def_lo = dlo, def_hi = dhi }
     end
     m.cal.attack_at_check = A
+    m.cal.dd_at_check = dd
     m.cal.last_check = os.clock()
     m.cal.rechecks = m.cal.rechecks or 0
     m.cal.rating, m.cal.level = p1, p2   -- raw packet params; VERIFY live via debug
@@ -885,6 +931,40 @@ end)
 -- GlobalSwap's sandboxed register_event accepts ONE event name per call
 -- (user_functions.lua register_event_user signature is (str, func)); the
 -- Debuffed-style multi-event form hard-errors at load. One call per event.
+-- Current MONSTER target, with sub-target tolerance.
+-- spawn_type 16 = monster (verified against Windower's own addons: InfoBar
+-- labels 16 TargetMOB, Debuffed gates on it; 13/14/9/1 are players and
+-- trusts, 2/34 are NPCs). While you sub-target a party member the last live
+-- monster is kept so the readout and the job-file push don't drop out.
+local pdl_last_mob = nil
+function pdl_target_mob_strict()   -- current target ONLY, no fallback.
+    -- ACTION paths (issuing /check) must use this: the game resolves
+    -- '/check' against whatever is targeted right now, so acting on the
+    -- sticky mob would check a sub-targeted party member instead.
+    local t = windower.ffxi.get_mob_by_target('t')
+    if t and t.valid_target and t.spawn_type == 16 then
+        pdl_last_mob = t.id
+        return t
+    end
+    return nil
+end
+
+function pdl_target_mob()   -- global: the job-file push site lives outside the tracker block
+    -- DISPLAY paths: current monster, else the last live one, so sub-targeting
+    -- a party member doesn't blank the readout or stall the job-file push.
+    local t = pdl_target_mob_strict()
+    if t then return t end
+    if pdl_last_mob then
+        local m = windower.ffxi.get_mob_by_id(pdl_last_mob)
+        if m and m.valid_target and m.spawn_type == 16
+           and m.hpp and m.hpp > 0 then
+            return m
+        end
+        pdl_last_mob = nil
+    end
+    return nil
+end
+
 local function pdl_reset_state()
     mobs, party_tp = {}, {}
     frailty = { active=false, pct=0, expires=0, source=nil }
@@ -910,8 +990,8 @@ windower.register_event('prerender', function()
         sample_party_tp()
         -- HUD update
         if settings.visible and pl and pl.status == 1 then
-            local ht = windower.ffxi.get_mob_by_target('t')
-            if ht and ht.valid_target then
+            local ht = pdl_target_mob()
+            if ht then
                 local est = pdl_estimated_ratio(ht.id)
                 hud:text(('PDL: %.2f'):format(est))
                 if est >= pdl_threshold() then
@@ -928,20 +1008,32 @@ windower.register_event('prerender', function()
         end
         -- Auto /check: once per engaged mob, never for known-ITG mobs
         if settings.autocheck and pl and pl.status == 1 then
-            local t = windower.ffxi.get_mob_by_target('t')
-            if t and t.valid_target then
+            local t = pdl_target_mob_strict()
+            if t then
                 local m = mob_entry(t.id)
+                -- A /check whose response never arrives (target lost, mob
+                -- died, packet missed) would otherwise strand this mob's
+                -- autocheck forever. Expire the pending flag and retry.
+                if m.check_pending
+                   and now - m.check_pending > pdl_config.check_timeout then
+                    m.check_pending = nil
+                end
                 if not m.cal and not m.gauge_proof and not m.check_pending then
                     m.check_pending = now
                     windower.send_command('input /check')
                 elseif m.cal and not m.check_pending and attack_now
                        and m.cal.attack_at_check then
-                    -- attack changed materially since last check: recheck to
-                    -- intersect defense bounds at the new state
+                    -- Re-check when the RATIO has moved, from either side:
+                    -- a defense buff/debuff landed or wore off on the mob,
+                    -- or your own attack shifted 10%. Both narrow the bounds
+                    -- because each verdict is intersected with the last.
                     local d = math.abs(attack_now - m.cal.attack_at_check)
                               / m.cal.attack_at_check
-                    if d >= 0.25 and m.cal.rechecks < 3
-                       and now - (m.cal.last_check or 0) > 10 then
+                    local ddn = pdl_get_defense_down(t.id)
+                    local dchg = math.abs(ddn - (m.cal.dd_at_check or 0)) > 0.005
+                    if (dchg or d >= 0.10)
+                       and m.cal.rechecks < pdl_config.recheck_max
+                       and now - (m.cal.last_check or 0) > pdl_config.recheck_gap then
                         m.cal.rechecks = m.cal.rechecks + 1
                         m.check_pending = now
                         windower.send_command('input /check')
@@ -1178,8 +1270,8 @@ windower.register_event('addon command', function(cmd, a1, a2)
         windower.add_to_chat(8, '[PDLTracker] debug: '
             .. (settings.debug and 'On' or 'Off'))
     elseif cmd == 'status' then
-        local t = windower.ffxi.get_mob_by_target('t')
-        if t and t.valid_target then
+        local t = pdl_target_mob()
+        if t then
             local est, atk, dd, mode = pdl_estimated_ratio(t.id)
             windower.add_to_chat(8, ('[PDLTracker] est %.2f [%s] atk %d defdown %d%% thr %.2f')
                 :format(est, mode, atk, dd * 100, pdl_threshold()))
