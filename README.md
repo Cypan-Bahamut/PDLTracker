@@ -51,6 +51,8 @@ No configuration required — it starts working on your first engaged target.
 | `//pdl save` | save the window's current position |
 | `//pdl base <n>` | static anchor ratio for unchecked/ITG mobs (default 1.10) |
 | `//pdl atk <n>` | your buffless attack (fallback scale; default 1500) |
+| `//pdl v <0-25>` | Sheol Gaol Vengeance rank (session-local; default 25) |
+| `//pdl htmb <ve\|e\|n\|d\|vd>` | HTMB difficulty tier (default vd) |
 | `//pdl status` | echo the full decomposition for your current target |
 | `//pdl debug` | packet tracing on/off |
 
@@ -60,3 +62,29 @@ Position is saved automatically when you drag the window.
 Built by Cypan (Bahamut). Debuff-tracking lineage: Debuffed by Xathe.
 Attack modifier / pDIF math per bg-wiki's PDIF documentation and community
 testing. Share freely.
+
+
+## ITG NM defense seeds and Vengeance
+
+For endgame NMs that check Impossible to Gauge, the tracker carries a
+name-keyed seed table (PDL_NM_DEFENSE, 50 entries: Sheol Gaol, Sortie,
+Omen, Dynamis Divergence, HELM/Kouryu/Warder of Courage, HTMB VD trio)
+built on a level-scaling model (Arebati V0 = 1320 tested, 55 defense per
+level). When a seeded name returns the ITG check verdict, the estimate
+switches to [seed] mode: def = base + per_v x Vengeance. Set your Gaol
+Vengeance rank with //pdl v <0-25> (session-local, defaults V25). Dynamis
+Divergence entries carry geo_mult 0.50: Frailty booked on those bosses
+is halved to match JP-tested zone nerfs. Edit the table in-file to add
+or correct NMs; entries carry kind = tested/measured/modeled provenance. HTMB entries resolve by difficulty tier: //pdl htmb <ve|e|n|d|vd>
+(defaults vd) rescales Cloud of Darkness, Shinryu, and Lilith through
+the tier-halving ladder (1036/1042/1052/1086; generic VD 1155 at CL 129, with Cloud of Darkness, Shinryu, and Lilith anchoring VD at 135 = 1320; tier defaults to VD).
+
+## Support
+
+These addons are free and always will be. If one of them saved you some time
+and you'd like to buy me a coffee, it's appreciated but never expected:
+
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-cypan-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/cypan)
+
+Bug reports and pull requests are worth more than donations. Open an issue if
+something's broken.

@@ -28,6 +28,9 @@ _addon.command = 'pdl'
 --   //pdl base <n>   static anchor for unchecked/ITG mobs (default 1.10)
 --   //pdl atk <n>    your buffless attack (model fallback + assumed-defense
 --                    scale; measured attack takes over automatically)
+--   //pdl v <0-25>   Sheol Gaol Vengeance rank (session-local, default 25)
+--   //pdl htmb <t>   HTMB difficulty tier: ve|e|n|d|vd (default vd)
+--   //pdl save       save the current window position
 --   //pdl status     echo full decomposition for the current target
 --   //pdl debug      toggle packet tracing
 --------------------------------------------------------------------------------
@@ -90,7 +93,7 @@ require('pack')  -- defensive: string:unpack('I',...) used by the 0x029 handler
 
 --------------------------------------------------------------------------------
 -- Config. All runtime-tunable. Fractions unless noted.
--- ASSUMED = design assumption you accepted; VERIFIED = bg-wiki / resources.
+-- ASSUMED = design assumption; VERIFIED = bg-wiki / resources.
 --------------------------------------------------------------------------------
 local pdl_config = {
     ------------------------------------------------------------------
@@ -106,7 +109,7 @@ local pdl_config = {
                     BRD=2.875, RDM=2.975, MNK=3.425, PUP=3.325, SAM=3.325,
                     WAR=3.575, DRG=3.675, RUN=3.375, DRK=4.125 },
     threshold_default = 3.075, -- 1H + tier II, fallback for unlisted jobs
-    -- Pre-randomizer pDIF caps by WEAPON SKILL (bg-wiki PDIF page, Cy pull
+    -- Pre-randomizer pDIF caps by WEAPON SKILL (bg-wiki PDIF page, pulled
     -- Aug 2026). Onset threshold = cap + Damage Limit trait - 0.375, where
     -- 0.375 is the randomizer upper-spread constant (same page: wRatio>=1.5
     -- band, UL = wRatio + 0.375).
@@ -115,7 +118,7 @@ local pdl_config = {
                    [11]=3.25, [12]=3.75 },
     -- H2H | Dagger | Sword | GS | Axe | GA | Scythe | Polearm | Katana |
     -- GKT | Club | Staff
-    -- Main-job Damage Limit trait value at 99 (his trait-page pull, Aug 2026)
+    -- Main-job Damage Limit trait value at 99 (trait page, pulled Aug 2026)
     main_trait = { DNC=0.2, THF=0.1, NIN=0.1, BST=0.2, BLU=0, BRD=0,
                    RDM=0.1, MNK=0.3, PUP=0.2, SAM=0.2, WAR=0.2, DRG=0.3,
                    RNG=0.3, DRK=0.5, RUN=0, WHM=0, BLM=0, SCH=0, GEO=0,
@@ -181,7 +184,7 @@ local pdl_config = {
     frailty_sylvie_pct = 0.125,  -- VERIFIED Sylvie Entrust Indi-Frailty
     frailty_sylvie_dur = 180,    -- resources base duration (Sylvie: no gear)
     -- Sheol Gaol: offensive Geomancy -85%% on the gaol bosses. Detected by
-    -- BOSS NAME (Cy ruling, Aug 2026) -- see SHEOL_GAOL_BOSSES below.
+    -- BOSS NAME (project ruling, Aug 2026) -- see SHEOL_GAOL_BOSSES below.
     sheol_gaol_geo_mult = 0.15,
 
     ------------------------------------------------------------------
@@ -198,7 +201,7 @@ local pdl_config = {
     -- community convention for defense modifiers. ASSUMPTION: flag for
     -- field verification if numbers ever look off.
     defup_moves = {                  -- pct by move name; SELF-buffs only
-        -- source: bg-wiki Jug Pets page (Cy pull, Aug 2026), per-pet tables:
+        -- source: bg-wiki Jug Pets page (pulled Aug 2026), per-pet tables:
         -- '+N% Defense for pet and Beastmaster. Duration varies with TP.'
         ['Scissor Guard'] = 1.00,
         ['Water Wall']    = 1.00,
@@ -219,14 +222,14 @@ local pdl_config = {
     defup_default_pct = 0.50,  -- unknown Defense Boost move: assume GENEROUS
                                -- (overstating their defense delays PDL = the
                                -- safe error direction)
-    defup_default_dur = 60,    -- standard 1 min (Cy/FFXIclopedia, Aug 2026)
+    defup_default_dur = 60,    -- standard 1 min (FFXIclopedia, Aug 2026)
     -- Re-check pacing. A /check prints to chat, so the public build is
-    -- conservative; Cy's own build is aggressive because catching the
-    -- early-debuff window matters more than chat noise (his ruling).
+    -- conservative; the shipped default is aggressive because catching the
+    -- early-debuff window matters more than chat noise.
     check_timeout = 5,   -- seconds before a stranded /check retries
     recheck_gap = 10,
     recheck_max = 10,
-    -- Protect/Protectra base flat defense per tier (bg-wiki, Cy Aug 2026)
+    -- Protect/Protectra base flat defense per tier (bg-wiki, Aug 2026)
     protect_flat = { [43]=20,  [44]=50,  [45]=90,  [46]=140, [47]=220,
                      [125]=20, [126]=50, [127]=90, [128]=140, [129]=220 },
     protect_dur  = 1800,
@@ -234,7 +237,7 @@ local pdl_config = {
     -- for a geared endgame caster once their duration bonus is known.
     dia_dur_mult = 1.0,
     -- Dia III player-cast duration: '50%% waypoint between base and endgame
-    -- enfeebling-duration gear' (Cy). Implemented as 1.5x assuming endgame
+    -- enfeebling-duration gear' (project ruling). Implemented as 1.5x assuming endgame
     -- ~2x base; adjust this one number if that assumption is off.
     dia3_player_mult = 1.5,
     defense_floor  = 0.95,       -- defense floors at 1 in-game
@@ -268,7 +271,7 @@ local WS_DEFDOWN = {
     ['Armor Break']   = { pct = 0.25,  dur = tp_scaled_dur },
     ['Full Break']    = { pct = 0.125, dur = tp_scaled_dur },
     ['Shell Crusher'] = { pct = 0.25,  dur = tp_scaled_dur },
-    -- bg-wiki Defense Down page (Cy pull, Aug 2026):
+    -- bg-wiki Defense Down page (pulled Aug 2026):
     ['Garland of Bliss']  = { pct = 0.125, dur = function(tp)
         tp = math.max(1000, math.min(tp or 1000, 3000))
         return 60 + 120 * ((tp - 1000) / 2000)         -- 1-3 min TP-scaled
@@ -434,7 +437,7 @@ local MSG_GAIN      = { [166]=true, [186]=true, [194]=true, [205]=true,
 local BUFF_DEFBOOST = 93   -- VERIFIED resources/buffs.lua
 local BUFF_PROTECT  = 40   -- VERIFIED resources/buffs.lua
 local res_ma = (res and res.monster_abilities) or {}
--- Sheol Gaol bosses (Cy, Aug 2026): offensive Geomancy -85%% on these.
+-- Sheol Gaol bosses (Aug 2026): offensive Geomancy -85%% on these.
 -- Atonement 1-4 complete set; name-matched at defense-computation time.
 local SHEOL_GAOL_BOSSES = {
     ['Dealan-dhe']=true, ['Sgili']=true, ['U Bnai']=true, ['Gogmagog']=true,
@@ -445,7 +448,7 @@ local SHEOL_GAOL_BOSSES = {
 }
 
 local MSG_AFFLICT = { [236]=true, [237]=true }  -- VERIFIED action_messages
--- bg-wiki Defense Down page (Cy pull, Aug 2026): pct, duration (midpoints)
+-- bg-wiki Defense Down page (pulled Aug 2026): pct, duration (midpoints)
 local DEFDOWN_SPELLS = {   -- Blue Magic, by spell name
     ['Benthic Typhoon']={0.10,30},  ['Bilgestorm']={0.25,45},
     ['Corrosive Ooze']={0.05,75},   ['Enervation']={0.10,30},
@@ -470,7 +473,7 @@ end
 local function apply_dia(target, tier, caster_id)
     local m = mob_entry(target)
     if m.dia and live(m.dia) and m.dia.tier > tier then return end
-    -- Duration policy (Cy ruling, Aug 2026): Dia III from a PLAYER assumes
+    -- Duration policy (project ruling, Aug 2026): Dia III from a PLAYER assumes
     -- the 50%% waypoint of endgame enfeebling-duration gear; Dia III from a
     -- TRUST (spawn_type 14) assumes job base; Dia I/II
     -- assume no duration gear. Any renewal cast resets the timer (the
@@ -515,6 +518,101 @@ local function apply_defdown(target, name, pct, dur)
     dbg('%s (%.1f%%) on %d for %ds', name, pct*100, target, dur)
 end
 
+-- ITG NM defense seeds (level model 2026-08-23; NM_Defense_Table.md is
+-- the sourced reference). Seed est: def = base + per_v * pdl_vengeance.
+-- geo_mult marks zone geo-debuff nerfs (Dynamis D ~50%, ffxiah 52513 JP
+-- testing); Sheol Gaol keeps its own 0.15 path.
+local PDL_NM_DEFENSE = {
+    -- Odyssey Sheol Gaol (per_v applies: Vengeance rank scaling)
+    ['Arebati'] = { base = 1320, level = 135, per_v = 55, kind = 'tested',
+                    src = 'ffxiah 58150 Lockhartt' },
+    ['Kalunga'] = { base = 1320, level = 135, per_v = 55, kind = 'modeled',
+                    src = 'level model, T3 tier' },
+    ['Ngai']    = { base = 1320, level = 135, per_v = 55, kind = 'modeled',
+                    src = 'level model, T3 tier' },
+    ['Xevioso'] = { base = 1320, level = 135, per_v = 55, kind = 'modeled',
+                    src = 'level model, T3 tier' },
+    ['Mboze']   = { base = 1320, level = 135, per_v = 55, kind = 'modeled',
+                    src = 'level model, T3 tier' },
+    ['Ongo']    = { base = 1320, level = 135, per_v = 55, kind = 'modeled',
+                    src = 'level model, T3 tier' },
+    ['Bumba']   = { base = 1540, level = 139, per_v = 55, kind = 'modeled',
+                    src = 'level model 139' },
+
+    -- Omen (project ruling: Glassies 135, others 139)
+    ['Glassy Craver']  = { base = 1320, level = 135, per_v = 0, kind = 'modeled', src = 'level model' },
+    ['Glassy Thinker'] = { base = 1320, level = 135, per_v = 0, kind = 'modeled', src = 'level model' },
+    ['Glassy Gorger']  = { base = 1320, level = 135, per_v = 0, kind = 'modeled', src = 'level model' },
+    ['Kyou'] = { base = 1540, level = 139, per_v = 0, kind = 'modeled', src = 'level model' },
+    ['Kei']  = { base = 1540, level = 139, per_v = 0, kind = 'modeled', src = 'level model' },
+    ['Kin']  = { base = 1540, level = 139, per_v = 0, kind = 'modeled', src = 'level model' },
+    ['Gin']  = { base = 1540, level = 139, per_v = 0, kind = 'modeled', src = 'level model' },
+    ['Fu']   = { base = 1540, level = 139, per_v = 0, kind = 'modeled', src = 'level model' },
+    ['Ou']   = { base = 1540, level = 139, per_v = 0, kind = 'modeled', src = 'level model' },
+
+    -- Dynamis - Divergence (CL149 bg-wiki; names bg-wiki zone pages + ffxiah 52513)
+    ['Overseer\'s Tombstone'] = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Sandy W1' },
+    ['Mu\'Sha Effigy']        = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Bastok W1' },
+    ['Evincing Idol']          = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Windurst W1' },
+    ['Impish Golem']           = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Jeuno W1' },
+    ['Halphas']                = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Sandy W2' },
+    ['Ka\'Rho Fearsinger']    = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Bastok W2' },
+    ['Fii Pexu the Eternal']   = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Windurst W2' },
+    ['Obstatrix']              = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Jeuno W2' },
+    ['Disjoined Elvaan']       = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Sandy W3' },
+    ['Disjoined Galka']        = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Bastok W3' },
+    ['Disjoined Tarutaru']     = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Windurst W3' },
+    ['Disjoined Mithra']       = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Jeuno W3' },
+
+    -- HELM NMs + Escha Ru'Aun additions (project ruling: all 150)
+    ['Zerde']       = { base = 2145, level = 150, per_v = 0, kind = 'modeled', src = 'level model 150' },
+    ['Vinipata']    = { base = 2145, level = 150, per_v = 0, kind = 'modeled', src = 'level model 150' },
+    ['Schah']       = { base = 2145, level = 150, per_v = 0, kind = 'modeled', src = 'level model 150' },
+    ['Albumen']     = { base = 2145, level = 150, per_v = 0, kind = 'modeled', src = 'level model 150' },
+    ['Onychophora'] = { base = 2145, level = 150, per_v = 0, kind = 'modeled', src = 'level model 150' },
+    ['Erinys']      = { base = 2145, level = 150, per_v = 0, kind = 'modeled', src = 'level model 150' },
+    ['Teles']       = { base = 2145, level = 150, per_v = 0, kind = 'modeled', src = 'level model 150' },
+    ['Kouryu']      = { base = 2145, level = 150, per_v = 0, kind = 'modeled', src = 'level model 150' },
+    ['Warder of Courage'] = { base = 2145, level = 150, per_v = 0, kind = 'modeled', src = 'level model 150' },
+
+    -- HTMB named VD seeds (project ruling: 134 at VD)
+    ['Cloud of Darkness'] = { htmb = true, vd = 1320, base = 1320, level = 134, per_v = 0, kind = 'modeled', src = 'level model VD 134' },
+    ['Shinryu']           = { htmb = true, vd = 1320, base = 1320, level = 134, per_v = 0, kind = 'modeled', src = 'level model VD 134' },
+    ['Lilith']            = { htmb = true, vd = 1320, base = 1320, level = 134, per_v = 0, kind = 'modeled', src = 'level model VD 134' },
+
+    -- Sortie (project ruling 2026-08-23: A-D level 135, E-H 145, Aminon 149)
+    ['Ghatjot']   = { base = 1320, level = 135, per_v = 0, kind = 'modeled',
+                    src = 'level model, Sortie A' },
+    ['Leshonn']   = { base = 1320, level = 135, per_v = 0, kind = 'modeled',
+                    src = 'level model, Sortie B' },
+    ['Skomora']   = { base = 1320, level = 135, per_v = 0, kind = 'modeled',
+                    src = 'level model, Sortie C' },
+    ['Degei']     = { base = 1320, level = 135, per_v = 0, kind = 'modeled',
+                    src = 'level model, Sortie D' },
+    ['Dhartok']   = { base = 1870, level = 145, per_v = 0, kind = 'modeled',
+                    src = 'level model, Sortie E' },
+    ['Gartell']   = { base = 1870, level = 145, per_v = 0, kind = 'modeled',
+                    src = 'level model, Sortie F' },
+    ['Triboulex'] = { base = 1870, level = 145, per_v = 0, kind = 'modeled',
+                    src = 'level model, Sortie G' },
+    ['Aita']      = { base = 1870, level = 145, per_v = 0, kind = 'modeled',
+                    src = 'level model, Sortie H' },
+    ['Aminon']    = { base = 2090, level = 149, per_v = 0, kind = 'modeled',
+                    src = 'level model; Incessant Void mode not modeled' },
+
+    -- Open world Locus camps
+    ['Locus Ghost Crab'] = { base = 1446, level = 137, per_v = 0,
+                    kind = 'measured', src = 'measured in-game 1413-1479' },
+}
+-- HTMB tier defense, tier-halving model (project rulings 2026-08-23): generic
+-- VD = CL 129 (1155); the hard trio (Cloud of Darkness, Shinryu, Lilith)
+-- override VD to the 135 anchor via their vd field (1320). Descending,
+-- the 55/level slope halves at each knee (135, 129, 124, 119, 116):
+-- 27.5, 13.75, 6.875, 3.4375, 1.71875. Tier defaults to VD; Vengeance defaults 25.
+local HTMB_TIER_DEF = { ve = 1036, e = 1042, n = 1052, d = 1086, vd = 1155 }
+local pdl_htmb_tier = 'vd'   -- //pdl htmb <ve|e|n|d|vd>, defaults VD (project ruling)
+local pdl_vengeance = 25   -- defaults V25 (project ruling)   -- //pdl v <n> (Gaol Vengeance rank; session-local)
+
 local function pdl_actor_in_party(id)
     -- true = confirmed party/alliance member; false = confirmed outsider;
     -- nil = cannot confirm (party API unavailable). Members out of zone have
@@ -531,7 +629,7 @@ local function pdl_actor_in_party(id)
 end
 
 local function apply_frailty(pct, dur, source)
-    -- Strongest live aura wins (geomancy same-aura stacking rule; Cy ruling
+    -- Strongest live aura wins (geomancy same-aura stacking rule; project ruling
     -- Aug 2026, crab-log epoch). Equal or stronger recasts refresh the timer.
     if frailty.active and os.clock() < frailty.expires
        and frailty.pct > pct then
@@ -562,7 +660,7 @@ local function on_action(act)
         local m = mobs[t1.id]
         if m and live(m.dia) then
             m.dia.shot = true   -- potency only; Quick Draw does NOT extend
-                                -- duration (Cy ruling, Aug 2026)
+                                -- duration (project ruling, Aug 2026)
         end
         return
     end
@@ -653,13 +751,13 @@ local function on_action(act)
         local spell_name = FRAILTY_SPELLS[act.param]
         local actor      = windower.ffxi.get_mob_by_id(act.actor_id)
         local in_pt      = pdl_actor_in_party(act.actor_id)
-        -- Party filter (Cy directive, Aug 2026 crab log): zone outsiders'
+        -- Party filter (design decision, Aug 2026 combat log): zone outsiders'
         -- frailty must never book (their auras are not on our mobs).
         if actor and in_pt == false then
             dbg('Frailty from %s ignored: not in party', actor.name)
             return
         end
-        -- Ambiguity nerfs DOWN to Sylvie potency (his ruling): nil actor or
+        -- Ambiguity nerfs DOWN to Sylvie potency (project ruling): nil actor or
         -- unconfirmable membership books 12.5, never the Idris 41.8. Only a
         -- resolvable, confirmed-party, non-Sylvie caster keeps the player-GEO
         -- Idris assumption.
@@ -745,7 +843,7 @@ local function on_action(act)
     end
 
     -- Spirit-Surged Jump (SELF only -- own buffs are knowable): Jump under
-    -- Spirit Surge lands Defense Down -20%% for 60s (bg-wiki, Cy Aug 2026)
+    -- Spirit Surge lands Defense Down -20%% for 60s (bg-wiki, Aug 2026)
     if act.category == 6 and act.param == 66 and act.actor_id == player_id then
         local plss = windower.ffxi.get_player()
         if plss and plss.buffs then
@@ -1077,6 +1175,12 @@ function pdl_get_defense_down(mob_id)
         if mb and SHEOL_GAOL_BOSSES[mb.name] then
             b.frailty = b.frailty * pdl_config.sheol_gaol_geo_mult
         end
+        local zseed = mb and PDL_NM_DEFENSE[mb.name]
+        if zseed and zseed.geo_mult then
+            -- Zone geo-debuff nerf (e.g. Dynamis D ~50%); never stacks with
+            -- the Gaol path because Gaol names carry no geo_mult.
+            b.frailty = b.frailty * zseed.geo_mult
+        end
     end
 
     local total = math.min(b.dia + b.step + b.defdown + b.frailty,
@@ -1179,7 +1283,22 @@ function pdl_estimated_ratio(mob_id)
         est = math.max(floor_est, model_est)
         mode = measured and 'cal' or 'cal~'
     elseif m and m.gauge_proof then
-        est, mode = model_est, 'itg-static'
+        -- Seeded ITG NMs: name-keyed base defense
+        -- from PDL_NM_DEFENSE, Vengeance-scaled, replaces the blind anchor.
+        local smb = windower.ffxi.get_mob_by_id
+                    and windower.ffxi.get_mob_by_id(mob_id)
+        local seed = smb and PDL_NM_DEFENSE[smb.name]
+        if seed then
+            local sbase = seed.htmb
+                          and ((pdl_htmb_tier == 'vd' and seed.vd)
+                               or HTMB_TIER_DEF[pdl_htmb_tier])
+                          or seed.base
+            local sdef = sbase + (seed.per_v or 0) * pdl_vengeance
+                         + pdl_protect_flat(mob_id)
+            est, mode = A / (sdef * eff), 'seed'
+        else
+            est, mode = model_est, 'itg-static'
+        end
     else
         est, mode = model_est, 'static'
     end
@@ -1256,6 +1375,22 @@ windower.register_event('addon command', function(cmd, a1, a2)
         settings.base_attack = tonumber(a1)
         config.save(settings)
         windower.add_to_chat(8, '[PDLTracker] buffless attack: ' .. settings.base_attack)
+    elseif cmd == 'v' then
+        local n = tonumber(a1)
+        if n then
+            pdl_vengeance = math.max(0, math.min(25, n))
+        end
+        windower.add_to_chat(8, '[PDLTracker] Vengeance: V' .. pdl_vengeance
+            .. (n and '' or ' (usage: //pdl v <0-25>)'))
+    elseif cmd == 'htmb' then
+        local t = a1 and a1:lower()
+        if t and HTMB_TIER_DEF[t] then
+            pdl_htmb_tier = t
+        end
+        windower.add_to_chat(8, '[PDLTracker] HTMB tier: '
+            .. pdl_htmb_tier:upper()
+            .. ((t and HTMB_TIER_DEF[t]) and (' (def basis ' .. HTMB_TIER_DEF[t] .. ')')
+                or ' (usage: //pdl htmb <ve|e|n|d|vd>)'))
     elseif cmd == 'save' then
         local x, y = hud:pos()
         if x and y then
@@ -1279,6 +1414,6 @@ windower.register_event('addon command', function(cmd, a1, a2)
             windower.add_to_chat(8, '[PDLTracker] no target')
         end
     else
-        windower.add_to_chat(8, '[PDLTracker] //pdl | //pdl save | //pdl base <n> | //pdl atk <n> | //pdl status | //pdl debug')
+        windower.add_to_chat(8, '[PDLTracker] //pdl | //pdl save | //pdl base <n> | //pdl atk <n> | //pdl v <0-25> | //pdl htmb <ve|e|n|d|vd> | //pdl status | //pdl debug')
     end
 end)
