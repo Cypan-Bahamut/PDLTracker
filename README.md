@@ -77,7 +77,7 @@ Divergence entries carry geo_mult 0.50: Frailty booked on those bosses
 is halved to match JP-tested zone nerfs. Edit the table in-file to add
 or correct NMs; entries carry kind = tested/measured/modeled provenance. HTMB entries resolve by difficulty tier: //pdl htmb <ve|e|n|d|vd>
 (defaults vd) rescales Cloud of Darkness, Shinryu, and Lilith through
-the tier-halving ladder (1036/1042/1052/1086; generic VD 1155 at CL 129, with Cloud of Darkness, Shinryu, and Lilith anchoring VD at 135 = 1320; tier defaults to VD).
+the difficulty ladder (VE 1052 / E 1086 / N 1155 / D 1293 / VD 1540, from menu levels 119/124/129 with D 134 / VD 139 assumed; tier defaults to VD).
 
 ## Support
 

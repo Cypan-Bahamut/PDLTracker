@@ -575,10 +575,10 @@ local PDL_NM_DEFENSE = {
     ['Kouryu']      = { base = 2145, level = 150, per_v = 0, kind = 'modeled', src = 'level model 150' },
     ['Warder of Courage'] = { base = 2145, level = 150, per_v = 0, kind = 'modeled', src = 'level model 150' },
 
-    -- HTMB named VD seeds (project ruling: 134 at VD)
-    ['Cloud of Darkness'] = { htmb = true, vd = 1320, base = 1320, level = 134, per_v = 0, kind = 'modeled', src = 'level model VD 134' },
-    ['Shinryu']           = { htmb = true, vd = 1320, base = 1320, level = 134, per_v = 0, kind = 'modeled', src = 'level model VD 134' },
-    ['Lilith']            = { htmb = true, vd = 1320, base = 1320, level = 134, per_v = 0, kind = 'modeled', src = 'level model VD 134' },
+    -- HTMB named VD seeds (project ruling: 139 at VD)
+    ['Cloud of Darkness'] = { htmb = true, vd = 1540, base = 1540, level = 139, per_v = 0, kind = 'modeled', src = 'level model VD 139' },
+    ['Shinryu']           = { htmb = true, vd = 1540, base = 1540, level = 139, per_v = 0, kind = 'modeled', src = 'level model VD 139' },
+    ['Lilith']            = { htmb = true, vd = 1540, base = 1540, level = 139, per_v = 0, kind = 'modeled', src = 'level model VD 139' },
 
     -- Sortie (project ruling 2026-08-23: A-D level 135, E-H 145, Aminon 149)
     ['Ghatjot']   = { base = 1320, level = 135, per_v = 0, kind = 'modeled',
@@ -604,12 +604,14 @@ local PDL_NM_DEFENSE = {
     ['Locus Ghost Crab'] = { base = 1446, level = 137, per_v = 0,
                     kind = 'measured', src = 'measured in-game 1413-1479' },
 }
--- HTMB tier defense, tier-halving model (project rulings 2026-08-23): generic
--- VD = CL 129 (1155); the hard trio (Cloud of Darkness, Shinryu, Lilith)
--- override VD to the 135 anchor via their vd field (1320). Descending,
--- the 55/level slope halves at each knee (135, 129, 124, 119, 116):
--- 27.5, 13.75, 6.875, 3.4375, 1.71875. Tier defaults to VD; Vengeance defaults 25.
-local HTMB_TIER_DEF = { ve = 1036, e = 1042, n = 1052, d = 1086, vd = 1155 }
+-- HTMB tier defense (ladder model 2026-08-28): this table serves the hard trio
+-- (Cloud of Darkness, Shinryu, Lilith -- the only htmb seeds). Menu-read
+-- levels VE 119 / E 124 / N 129; D 134 / VD 139 assumed (+5 spacing).
+-- Bases from the level curve (1320@135 anchor, 55/level above, halving
+-- slopes below at knees 135/129/124/119/116). Easier HTMBs, if ever
+-- seeded, take 113/116/119/122/125 -> 1036/1042/1052/1073/1100.
+-- Tier defaults to VD; Vengeance defaults 25.
+local HTMB_TIER_DEF = { ve = 1052, e = 1086, n = 1155, d = 1293, vd = 1540 }
 local pdl_htmb_tier = 'vd'   -- //pdl htmb <ve|e|n|d|vd>, defaults VD (project ruling)
 local pdl_vengeance = 25   -- defaults V25 (project ruling)   -- //pdl v <n> (Gaol Vengeance rank; session-local)
 
