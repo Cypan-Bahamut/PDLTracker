@@ -20,9 +20,10 @@ No configuration required — it starts working on your first engaged target.
   window's status mode shows `cal~` during fallback, `cal` once measured.
 - Tracks **enemy defense down**: Dia (+Light Shot), Box Step daze level,
   Armor Break / Full Break / Shell Crusher / Tachi: Ageha / Angon with
-  TP-scaled durations, automaton Armor Shatterer (its Defense Down rides
-  the additional-effect packet slot, applied only when the proc actually
-  lands — a chain-closing hit shares that slot and books nothing),
+  TP-scaled durations, and damaging pet moves that carry Defense Down —
+  automaton Armor Shatterer plus the BST Ready moves (Corrosive Ooze,
+  Rhinowrecker, Sweeping Gouge, Swooping Frenzy, Tortoise Stomp), booked
+  on landed damage since these emit no additional-effect message —
   and Frailty (Sylvie-entrust aware). Frailty is
   party-filtered: casts from players outside your party/alliance are
   ignored, and an unidentifiable caster books at Sylvie potency, not

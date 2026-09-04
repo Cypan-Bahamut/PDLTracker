@@ -286,13 +286,19 @@ local JA_DEFDOWN = {
     ['Angon'] = { pct = 0.20, dur = function(_) return 90 end },
 }
 
--- Pet TP moves whose Defense Down rides as an ADDITIONAL effect on a damaging
--- move (never a 236/237 status action, so the generic landing path cannot see
--- it). bg-wiki Armor Shatterer: -15% for 90s base, TP-scaled to 150s @3000 --
--- pet TP is not observable, so base 90s is used (understating duration delays
--- PDL = safe).
+-- Damaging pet TP moves that carry Defense Down. Field-verified 2026-09-04:
+-- these emit NO additional-effect message and no 236/237 status action --
+-- landed damage IS the debuff signal, same treatment as Armor Break.
+-- Values: bg-wiki Defense Down page + Armor Shatterer page (potency fixed;
+-- AS duration is TP-scaled 90-150s but pet TP is not observable, so base
+-- 90s -- understating delays PDL = safe).
 local PET_WS_DEFDOWN = {
-    ['Armor Shatterer'] = { pct = 0.15, dur = 90 },   -- automaton (SS frame)
+    ['Armor Shatterer'] = { pct = 0.15,  dur = 90 },   -- automaton (SS frame)
+    ['Corrosive Ooze']  = { pct = 0.33,  dur = 77 },   -- BST slug
+    ['Rhinowrecker']    = { pct = 0.25,  dur = 60 },   -- BST horn beetle
+    ['Sweeping Gouge']  = { pct = 0.25,  dur = 60 },   -- BST raaz
+    ['Swooping Frenzy'] = { pct = 0.25,  dur = 105 },  -- BST tulfaire
+    ['Tortoise Stomp']  = { pct = 0.25,  dur = 155 },  -- BST adamantoise
 }
 
 local DEFDOWN_STATUS = 149  -- shared Defense Down status (VERIFIED: Angon
@@ -853,25 +859,26 @@ local function on_action(act)
         return
     end
 
-    -- Pet TP finish (category 13): automaton WS Defense Down. Damage-landed
-    -- gate 185/187/317/802 (the pet damage-message set); the debuff procced
-    -- only on add_effect message 160/164 ("Additional effect: <status>", the
-    -- only two such ids in action_messages). A skillchain conclusion rides
-    -- the SAME add_effect slot (ids 288+), so a chain-closing hit books
-    -- nothing -- a miss in the safe (understating) direction.
-    -- No unconditional return: unmatched cat-13 actions keep falling through.
-    if act.category == 13 then
+    -- Pet TP finish: Defense Down riding a damaging pet move (field-verified
+    -- 2026-09-04: no additional-effect message exists -- landed damage IS
+    -- the signal, same treatment as the category-3 WS block above). Pets
+    -- arrive as category 11 (mob_tp_finish) or 13; landed-damage gate
+    -- 185/187/317/802, so 188 miss / 189 no-effect never book. Name-gated
+    -- via monster_abilities; the target filter keeps a MOB's use of these
+    -- moves on us from booking.
+    -- No unconditional return: unmatched actions keep falling through.
+    if act.category == 11 or act.category == 13 then
         local ma  = res_ma[act.param]
         local def = ma and PET_WS_DEFDOWN[ma.en]
         if def and (a1.message == 185 or a1.message == 187
                     or a1.message == 317 or a1.message == 802)
-           and a1.has_add_effect and (a1.add_effect_message == 160
-                                      or a1.add_effect_message == 164) then
+           and t1.id ~= player_id and not party_jobs[t1.id]
+           and t1.id ~= act.actor_id then
             apply_defdown(t1.id, ma.en, def.pct, def.dur)
             return
         elseif settings.debug and def then
-            dbg('petWS %s msg=%d addfx=%s (unmatched)', ma.en, a1.message,
-                tostring(a1.add_effect_message))
+            dbg('petWS %s cat=%d msg=%d tgt=%d (unmatched)', ma.en,
+                act.category, a1.message, t1.id)
         end
     end
 
