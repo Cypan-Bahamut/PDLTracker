@@ -20,7 +20,10 @@ No configuration required — it starts working on your first engaged target.
   window's status mode shows `cal~` during fallback, `cal` once measured.
 - Tracks **enemy defense down**: Dia (+Light Shot), Box Step daze level,
   Armor Break / Full Break / Shell Crusher / Tachi: Ageha / Angon with
-  TP-scaled durations, and Frailty (Sylvie-entrust aware). Frailty is
+  TP-scaled durations, automaton Armor Shatterer (its Defense Down rides
+  the additional-effect packet slot, applied only when the proc actually
+  lands — a chain-closing hit shares that slot and books nothing),
+  and Frailty (Sylvie-entrust aware). Frailty is
   party-filtered: casts from players outside your party/alliance are
   ignored, and an unidentifiable caster books at Sylvie potency, not
   the full player-GEO (Idris) assumption.

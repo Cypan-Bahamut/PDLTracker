@@ -1,6 +1,6 @@
 _addon.name    = 'PDL Tracker'
 _addon.author  = 'Cypan (Bahamut)'
-_addon.version = '1.0.0.0'
+_addon.version = '1.1.0.0'
 _addon.command = 'pdl'
 
 --------------------------------------------------------------------------------
@@ -284,6 +284,15 @@ local JA_DEFDOWN = {
     -- bg-wiki: Angon -20~25%, 30-90s (resources base dur 30; merit-scaled).
     -- Per design ("assume full"): 90s. Conservative potency 0.20.
     ['Angon'] = { pct = 0.20, dur = function(_) return 90 end },
+}
+
+-- Pet TP moves whose Defense Down rides as an ADDITIONAL effect on a damaging
+-- move (never a 236/237 status action, so the generic landing path cannot see
+-- it). bg-wiki Armor Shatterer: -15% for 90s base, TP-scaled to 150s @3000 --
+-- pet TP is not observable, so base 90s is used (understating duration delays
+-- PDL = safe).
+local PET_WS_DEFDOWN = {
+    ['Armor Shatterer'] = { pct = 0.15, dur = 90 },   -- automaton (SS frame)
 }
 
 local DEFDOWN_STATUS = 149  -- shared Defense Down status (VERIFIED: Angon
@@ -842,6 +851,28 @@ local function on_action(act)
                 a1.param or -1)
         end
         return
+    end
+
+    -- Pet TP finish (category 13): automaton WS Defense Down. Damage-landed
+    -- gate 185/187/317/802 (the pet damage-message set); the debuff procced
+    -- only on add_effect message 160/164 ("Additional effect: <status>", the
+    -- only two such ids in action_messages). A skillchain conclusion rides
+    -- the SAME add_effect slot (ids 288+), so a chain-closing hit books
+    -- nothing -- a miss in the safe (understating) direction.
+    -- No unconditional return: unmatched cat-13 actions keep falling through.
+    if act.category == 13 then
+        local ma  = res_ma[act.param]
+        local def = ma and PET_WS_DEFDOWN[ma.en]
+        if def and (a1.message == 185 or a1.message == 187
+                    or a1.message == 317 or a1.message == 802)
+           and a1.has_add_effect and (a1.add_effect_message == 160
+                                      or a1.add_effect_message == 164) then
+            apply_defdown(t1.id, ma.en, def.pct, def.dur)
+            return
+        elseif settings.debug and def then
+            dbg('petWS %s msg=%d addfx=%s (unmatched)', ma.en, a1.message,
+                tostring(a1.add_effect_message))
+        end
     end
 
     -- Spirit-Surged Jump (SELF only -- own buffs are knowable): Jump under
