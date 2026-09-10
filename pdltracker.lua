@@ -22,8 +22,8 @@ _addon.command = 'pdl'
 --    gauge" NMs fall back to a static anchor (//pdl base <n>).
 --  * Threshold: per-job pDIF caps + Damage Limit traits (main and
 --    qualifying sub), lifted dynamically by Aria of Passion (SV-aware).
---  * HTMB tier: auto-detected from the battlefield entry lines
---    ('Current difficulty level: ...'); //pdl htmb overrides.
+--  * HTMB tier: auto-detected from the game's battlefield entry line
+--    'Current difficulty level: ...'; //pdl htmb overrides.
 --
 -- Commands:
 --   //pdl            toggle the window
@@ -1136,11 +1136,11 @@ windower.register_event('load', pdl_set_player_id)
 windower.register_event('login', pdl_set_player_id)
 player_id = (windower.ffxi.get_player() or {}).id or 0
 
--- HTMB tier auto-detect (Sep 2026). Battlefield entry announces the
--- difficulty twice -- 'Entering <name> battlefield (Very Easy).' then
--- 'Current difficulty level: Very easy.' (case differs between the two).
--- Parse either; //pdl htmb stays as the manual override. All five
--- spellings attested in field logs.
+-- HTMB tier auto-detect (Sep 2026). The game's battlefield-entry line is
+-- 'Current difficulty level: Very easy.' (sentence case; runs through
+-- Very difficult) -- that line alone is the trigger, so addon-injected
+-- chat cannot spoof it. //pdl htmb stays as the manual override. All
+-- five tier spellings attested in field logs.
 local HTMB_TIER_WORDS = {
     ['very easy'] = 've', ['easy'] = 'e', ['normal'] = 'n',
     ['difficult'] = 'd', ['very difficult'] = 'vd',
@@ -1149,7 +1149,6 @@ windower.register_event('incoming text', function(original)
     if not original then return end
     local line = original:gsub('[\30\31].', ''):gsub('\127.', ''):lower()
     local phrase = line:match('current difficulty level: ([%a ]+)%.')
-                   or line:match('entering .- battlefield %(([%a ]+)%)%.')
     local tier = phrase and HTMB_TIER_WORDS[phrase]
     if tier and tier ~= pdl_htmb_tier then
         pdl_htmb_tier = tier
