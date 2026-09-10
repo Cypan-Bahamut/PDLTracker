@@ -1,6 +1,6 @@
 _addon.name    = 'PDL Tracker'
 _addon.author  = 'Cypan (Bahamut)'
-_addon.version = '1.1.0.0'
+_addon.version = '1.2.0.0'
 _addon.command = 'pdl'
 
 --------------------------------------------------------------------------------
@@ -22,6 +22,8 @@ _addon.command = 'pdl'
 --    gauge" NMs fall back to a static anchor (//pdl base <n>).
 --  * Threshold: per-job pDIF caps + Damage Limit traits (main and
 --    qualifying sub), lifted dynamically by Aria of Passion (SV-aware).
+--  * HTMB tier: auto-detected from the battlefield entry lines
+--    ('Current difficulty level: ...'); //pdl htmb overrides.
 --
 -- Commands:
 --   //pdl            toggle the window
@@ -29,7 +31,8 @@ _addon.command = 'pdl'
 --   //pdl atk <n>    your buffless attack (model fallback + assumed-defense
 --                    scale; measured attack takes over automatically)
 --   //pdl v <0-25>   Sheol Gaol Vengeance rank (session-local, default 25)
---   //pdl htmb <t>   HTMB difficulty tier: ve|e|n|d|vd (default vd)
+--   //pdl htmb <t>   HTMB difficulty tier: ve|e|n|d|vd (default vd;
+--                    auto-set on battlefield entry)
 --   //pdl save       save the current window position
 --   //pdl status     echo full decomposition for the current target
 --   //pdl debug      toggle packet tracing
@@ -182,10 +185,8 @@ local pdl_config = {
     frailty_player_dur = 360,    -- ASSUMED: 180 base (resources Indi-Frailty)
                                  -- x2 for a full-duration-geared GEO
     frailty_sylvie_pct = 0.125,  -- VERIFIED Sylvie Entrust Indi-Frailty
-    frailty_sylvie_dur = 180,    -- resources base duration (Sylvie: no gear)
-    -- Sheol Gaol: offensive Geomancy -85%% on the gaol bosses. Detected by
-    -- BOSS NAME (project ruling, Aug 2026) -- see SHEOL_GAOL_BOSSES below.
-    sheol_gaol_geo_mult = 0.15,
+    frailty_sylvie_dur = 360,    -- bg-wiki Sylvie (UC): 'Enhanced Indicolure duration
+                                 -- (6 minutes total, includes Entrust effects)'
 
     ------------------------------------------------------------------
     -- Debuff potencies (VERIFIED bg-wiki unless noted)
@@ -229,6 +230,10 @@ local pdl_config = {
     check_timeout = 5,   -- seconds before a stranded /check retries
     recheck_gap = 10,
     recheck_max = 10,
+    -- Auto /check attempts per mob per fight while NO verdict comes back
+    -- (out of range, not facing, packet dropped). Caps the check_timeout
+    -- retry, which is otherwise unbounded. An ANSWERED check never retries.
+    autocheck_tries = 3,
     -- Protect/Protectra base flat defense per tier (bg-wiki, Aug 2026)
     protect_flat = { [43]=20,  [44]=50,  [45]=90,  [46]=140, [47]=220,
                      [125]=20, [126]=50, [127]=90, [128]=140, [129]=220 },
@@ -452,14 +457,26 @@ local MSG_GAIN      = { [166]=true, [186]=true, [194]=true, [205]=true,
 local BUFF_DEFBOOST = 93   -- VERIFIED resources/buffs.lua
 local BUFF_PROTECT  = 40   -- VERIFIED resources/buffs.lua
 local res_ma = (res and res.monster_abilities) or {}
--- Sheol Gaol bosses (Aug 2026): offensive Geomancy -85%% on these.
--- Atonement 1-4 complete set; name-matched at defense-computation time.
-local SHEOL_GAOL_BOSSES = {
-    ['Dealan-dhe']=true, ['Sgili']=true, ['U Bnai']=true, ['Gogmagog']=true,
-    ['Aristaeus']=true, ['Raskovniche']=true, ['Marmorkrebs']=true,
-    ['Gigelorum']=true, ['Procne']=true, ['Henwen']=true,
-    ['Xevioso']=true, ['Ngai']=true, ['Kalunga']=true, ['Ongo']=true,
-    ['Mboze']=true, ['Arebati']=true, ['Bumba']=true,
+-- Offensive-geomancy nerf by NM NAME (project ruling, Sep 2026: keyed on
+-- the target's name, never the zone). Frailty only -- attack-side Fury is
+-- not reduced. Single lookup, so no two nerf paths can compound.
+local GEO_NERF = {
+    -- Odyssey Sheol Gaol, Atonement 1-4 complete set: -85%
+    ['Dealan-dhe']=0.15, ['Sgili']=0.15, ['U Bnai']=0.15, ['Gogmagog']=0.15,
+    ['Aristaeus']=0.15, ['Raskovniche']=0.15, ['Marmorkrebs']=0.15,
+    ['Gigelorum']=0.15, ['Procne']=0.15, ['Henwen']=0.15,
+    ['Xevioso']=0.15, ['Ngai']=0.15, ['Kalunga']=0.15, ['Ongo']=0.15,
+    ['Mboze']=0.15, ['Arebati']=0.15, ['Bumba']=0.15,
+    -- Sortie basement bosses E-H + Aminon: -50% (bosses only)
+    ['Dhartok']=0.50, ['Gartell']=0.50, ['Triboulex']=0.50,
+    ['Aita']=0.50, ['Aminon']=0.50,
+    -- Dynamis Divergence wave bosses: -50% (ffxiah 52513 JP testing)
+    ['Overseer\'s Tombstone']=0.50, ['Mu\'Sha Effigy']=0.50,
+    ['Evincing Idol']=0.50, ['Impish Golem']=0.50,
+    ['Halphas']=0.50, ['Ka\'Rho Fearsinger']=0.50,
+    ['Fii Pexu the Eternal']=0.50, ['Obstatrix']=0.50,
+    ['Disjoined Elvaan']=0.50, ['Disjoined Galka']=0.50,
+    ['Disjoined Tarutaru']=0.50, ['Disjoined Mithra']=0.50,
 }
 
 local MSG_AFFLICT = { [236]=true, [237]=true }  -- VERIFIED action_messages
@@ -535,8 +552,7 @@ end
 
 -- ITG NM defense seeds (level model 2026-08-23; NM_Defense_Table.md is
 -- the sourced reference). Seed est: def = base + per_v * pdl_vengeance.
--- geo_mult marks zone geo-debuff nerfs (Dynamis D ~50%, ffxiah 52513 JP
--- testing); Sheol Gaol keeps its own 0.15 path.
+-- Geomancy nerfs live in GEO_NERF (by NM name), not on these rows.
 local PDL_NM_DEFENSE = {
     -- Odyssey Sheol Gaol (per_v applies: Vengeance rank scaling)
     ['Arebati'] = { base = 1320, level = 135, per_v = 55, kind = 'tested',
@@ -566,18 +582,18 @@ local PDL_NM_DEFENSE = {
     ['Ou']   = { base = 1540, level = 139, per_v = 0, kind = 'modeled', src = 'level model' },
 
     -- Dynamis - Divergence (CL149 bg-wiki; names bg-wiki zone pages + ffxiah 52513)
-    ['Overseer\'s Tombstone'] = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Sandy W1' },
-    ['Mu\'Sha Effigy']        = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Bastok W1' },
-    ['Evincing Idol']          = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Windurst W1' },
-    ['Impish Golem']           = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Jeuno W1' },
-    ['Halphas']                = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Sandy W2' },
-    ['Ka\'Rho Fearsinger']    = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Bastok W2' },
-    ['Fii Pexu the Eternal']   = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Windurst W2' },
-    ['Obstatrix']              = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Jeuno W2' },
-    ['Disjoined Elvaan']       = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Sandy W3' },
-    ['Disjoined Galka']        = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Bastok W3' },
-    ['Disjoined Tarutaru']     = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Windurst W3' },
-    ['Disjoined Mithra']       = { base = 2090, level = 149, per_v = 0, geo_mult = 0.50, kind = 'modeled', src = 'CL149; Jeuno W3' },
+    ['Overseer\'s Tombstone'] = { base = 2090, level = 149, per_v = 0, kind = 'modeled', src = 'CL149; Sandy W1' },
+    ['Mu\'Sha Effigy']        = { base = 2090, level = 149, per_v = 0, kind = 'modeled', src = 'CL149; Bastok W1' },
+    ['Evincing Idol']          = { base = 2090, level = 149, per_v = 0, kind = 'modeled', src = 'CL149; Windurst W1' },
+    ['Impish Golem']           = { base = 2090, level = 149, per_v = 0, kind = 'modeled', src = 'CL149; Jeuno W1' },
+    ['Halphas']                = { base = 2090, level = 149, per_v = 0, kind = 'modeled', src = 'CL149; Sandy W2' },
+    ['Ka\'Rho Fearsinger']    = { base = 2090, level = 149, per_v = 0, kind = 'modeled', src = 'CL149; Bastok W2' },
+    ['Fii Pexu the Eternal']   = { base = 2090, level = 149, per_v = 0, kind = 'modeled', src = 'CL149; Windurst W2' },
+    ['Obstatrix']              = { base = 2090, level = 149, per_v = 0, kind = 'modeled', src = 'CL149; Jeuno W2' },
+    ['Disjoined Elvaan']       = { base = 2090, level = 149, per_v = 0, kind = 'modeled', src = 'CL149; Sandy W3' },
+    ['Disjoined Galka']        = { base = 2090, level = 149, per_v = 0, kind = 'modeled', src = 'CL149; Bastok W3' },
+    ['Disjoined Tarutaru']     = { base = 2090, level = 149, per_v = 0, kind = 'modeled', src = 'CL149; Windurst W3' },
+    ['Disjoined Mithra']       = { base = 2090, level = 149, per_v = 0, kind = 'modeled', src = 'CL149; Jeuno W3' },
 
     -- HELM NMs + Escha Ru'Aun additions (project ruling: all 150)
     ['Zerde']       = { base = 2145, level = 150, per_v = 0, kind = 'modeled', src = 'level model 150' },
@@ -1120,6 +1136,28 @@ windower.register_event('load', pdl_set_player_id)
 windower.register_event('login', pdl_set_player_id)
 player_id = (windower.ffxi.get_player() or {}).id or 0
 
+-- HTMB tier auto-detect (Sep 2026). Battlefield entry announces the
+-- difficulty twice -- 'Entering <name> battlefield (Very Easy).' then
+-- 'Current difficulty level: Very easy.' (case differs between the two).
+-- Parse either; //pdl htmb stays as the manual override. All five
+-- spellings attested in field logs.
+local HTMB_TIER_WORDS = {
+    ['very easy'] = 've', ['easy'] = 'e', ['normal'] = 'n',
+    ['difficult'] = 'd', ['very difficult'] = 'vd',
+}
+windower.register_event('incoming text', function(original)
+    if not original then return end
+    local line = original:gsub('[\30\31].', ''):gsub('\127.', ''):lower()
+    local phrase = line:match('current difficulty level: ([%a ]+)%.')
+                   or line:match('entering .- battlefield %(([%a ]+)%)%.')
+    local tier = phrase and HTMB_TIER_WORDS[phrase]
+    if tier and tier ~= pdl_htmb_tier then
+        pdl_htmb_tier = tier
+        windower.add_to_chat(8, '[PDLTracker] HTMB tier auto: '..tier:upper()
+            ..' (def basis '..HTMB_TIER_DEF[tier]..')')
+    end
+end)
+
 windower.register_event('prerender', function()
     local now = os.clock()
     local pl = P()
@@ -1144,19 +1182,27 @@ windower.register_event('prerender', function()
         else
             hud:hide()
         end
-        -- Auto /check: once per engaged mob, never for known-ITG mobs
+        -- Auto /check: once per engaged mob. 'Impossible to gauge' is a
+        -- property of the mob, not of our state, so it cannot change
+        -- mid-fight: message 249 latches m.gauge_proof and that mob is
+        -- never auto-checked again. Fight-scoped -- the entry clears on
+        -- the mob's death or on zone, so the next enemy starts clean.
         if settings.autocheck and pl and pl.status == 1 then
             local t = pdl_target_mob_strict()
             if t then
                 local m = mob_entry(t.id)
                 -- A /check whose response never arrives (target lost, mob
                 -- died, packet missed) would otherwise strand this mob's
-                -- autocheck forever. Expire the pending flag and retry.
+                -- autocheck forever. Expire the pending flag and retry,
+                -- but only autocheck_tries times: an unanswerable check
+                -- must not become a /check loop for the whole fight.
                 if m.check_pending
                    and now - m.check_pending > pdl_config.check_timeout then
                     m.check_pending = nil
                 end
-                if not m.cal and not m.gauge_proof and not m.check_pending then
+                if not m.cal and not m.gauge_proof and not m.check_pending
+                   and (m.check_tries or 0) < pdl_config.autocheck_tries then
+                    m.check_tries = (m.check_tries or 0) + 1
                     m.check_pending = now
                     windower.send_command('input /check')
                 elseif m.cal and not m.check_pending and attack_now
@@ -1212,15 +1258,8 @@ function pdl_get_defense_down(mob_id)
         b.frailty = frailty.pct
         local mb = windower.ffxi.get_mob_by_id
                    and windower.ffxi.get_mob_by_id(mob_id)
-        if mb and SHEOL_GAOL_BOSSES[mb.name] then
-            b.frailty = b.frailty * pdl_config.sheol_gaol_geo_mult
-        end
-        local zseed = mb and PDL_NM_DEFENSE[mb.name]
-        if zseed and zseed.geo_mult then
-            -- Zone geo-debuff nerf (e.g. Dynamis D ~50%); never stacks with
-            -- the Gaol path because Gaol names carry no geo_mult.
-            b.frailty = b.frailty * zseed.geo_mult
-        end
+        local gm = mb and GEO_NERF[mb.name]
+        if gm then b.frailty = b.frailty * gm end
     end
 
     local total = math.min(b.dia + b.step + b.defdown + b.frailty,

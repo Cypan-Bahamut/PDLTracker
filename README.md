@@ -27,7 +27,11 @@ No configuration required — it starts working on your first engaged target.
   and Frailty (Sylvie-entrust aware). Frailty is
   party-filtered: casts from players outside your party/alliance are
   ignored, and an unidentifiable caster books at Sylvie potency, not
-  the full player-GEO (Idris) assumption.
+  the full player-GEO (Idris) assumption. On bosses that nerf offensive
+  Geomancy the booked Frailty is scaled by target NAME: all 17 Odyssey
+  Sheol Gaol Atonement NMs at -85%, the Sortie basement bosses
+  (Dhartok, Gartell, Triboulex, Aita, Aminon) at -50%, and the Dynamis
+  Divergence wave bosses at -50%.
 - Tracks **enemy defense swings in both directions**: mob self-buffs
   (Scissor Guard, Water Wall, Harden Shell, Cocoon — plus a generic
   Defense Boost catch-all), mob-cast Protect/Protectra (flat, per tier),
@@ -56,7 +60,7 @@ No configuration required — it starts working on your first engaged target.
 | `//pdl base <n>` | static anchor ratio for unchecked/ITG mobs (default 1.10) |
 | `//pdl atk <n>` | your buffless attack (fallback scale; default 1500) |
 | `//pdl v <0-25>` | Sheol Gaol Vengeance rank (session-local; default 25) |
-| `//pdl htmb <ve\|e\|n\|d\|vd>` | HTMB difficulty tier (default vd) |
+| `//pdl htmb <ve\|e\|n\|d\|vd>` | HTMB difficulty tier (default vd; auto-set on battlefield entry) |
 | `//pdl status` | echo the full decomposition for your current target |
 | `//pdl debug` | packet tracing on/off |
 
@@ -76,12 +80,18 @@ Omen, Dynamis Divergence, HELM/Kouryu/Warder of Courage, HTMB VD trio)
 built on a level-scaling model (Arebati V0 = 1320 tested, 55 defense per
 level). When a seeded name returns the ITG check verdict, the estimate
 switches to [seed] mode: def = base + per_v x Vengeance. Set your Gaol
-Vengeance rank with //pdl v <0-25> (session-local, defaults V25). Dynamis
-Divergence entries carry geo_mult 0.50: Frailty booked on those bosses
-is halved to match JP-tested zone nerfs. Edit the table in-file to add
-or correct NMs; entries carry kind = tested/measured/modeled provenance. HTMB entries resolve by difficulty tier: //pdl htmb <ve|e|n|d|vd>
-(defaults vd) rescales Cloud of Darkness, Shinryu, and Lilith through
-the difficulty ladder (VE 1052 / E 1086 / N 1155 / D 1293 / VD 1540, from menu levels 119/124/129 with D 134 / VD 139 assumed; tier defaults to VD).
+Vengeance rank with //pdl v <0-25> (session-local, defaults V25).
+Offensive-geomancy nerfs live in a single name-keyed table (GEO_NERF):
+Gaol Atonement NMs 0.15, Sortie basement bosses 0.50, Dynamis Divergence
+wave bosses 0.50 — Frailty booked on those names is scaled to match the
+zone mechanics (frailty only; Fury is unaffected). Edit either table
+in-file to add or correct NMs; seed entries carry kind =
+tested/measured/modeled provenance. HTMB entries resolve by difficulty
+tier, auto-detected from the battlefield entry lines ("Current
+difficulty level: ...") with //pdl htmb <ve|e|n|d|vd> as the manual
+override; the ladder rescales Cloud of Darkness, Shinryu, and Lilith
+(VE 1052 / E 1086 / N 1155 / D 1293 / VD 1540, from menu levels
+119/124/129 with D 134 / VD 139 assumed; tier defaults to VD).
 
 ## Support
 
