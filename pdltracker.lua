@@ -644,6 +644,8 @@ local PDL_NM_DEFENSE = {
 -- Tier defaults to VD; Vengeance defaults 25.
 local HTMB_TIER_DEF = { ve = 1052, e = 1086, n = 1155, d = 1293, vd = 1540 }
 local pdl_htmb_tier = 'vd'   -- //pdl htmb <ve|e|n|d|vd>, defaults VD (project ruling)
+local pdl_htmb_seen = nil    -- last parsed difficulty announcement; late-applied
+                             -- when an HTMB NM is evaluated (manual htmb clears it)
 local pdl_vengeance = 25   -- defaults V25 (project ruling)   -- //pdl v <n> (Gaol Vengeance rank; session-local)
 
 local function pdl_actor_in_party(id)
@@ -1148,12 +1150,21 @@ local HTMB_TIER_WORDS = {
 windower.register_event('incoming text', function(original)
     if not original then return end
     local line = original:gsub('[\30\31].', ''):gsub('\127.', ''):lower()
-    local phrase = line:match('current difficulty level: ([%a ]+)%.')
-    local tier = phrase and HTMB_TIER_WORDS[phrase]
-    if tier and tier ~= pdl_htmb_tier then
-        pdl_htmb_tier = tier
-        windower.add_to_chat(8, '[PDLTracker] HTMB tier auto: '..tier:upper()
-            ..' (def basis '..HTMB_TIER_DEF[tier]..')')
+    local phrase = line:match('current difficulty level:%s*([%a ]+)')
+    local tier = phrase and HTMB_TIER_WORDS[phrase:match('^%s*(.-)%s*$')]
+    if tier then
+        -- Remember AND apply now: the line prints during the battlefield
+        -- transition; the seed path late-applies pdl_htmb_seen when an
+        -- HTMB NM is actually evaluated, so the tier lands even if this
+        -- immediate set is lost before the fight.
+        pdl_htmb_seen = tier
+        if tier ~= pdl_htmb_tier then
+            pdl_htmb_tier = tier
+            windower.add_to_chat(8, '[PDLTracker] HTMB tier auto: '..tier:upper()
+                ..' (def basis '..HTMB_TIER_DEF[tier]..')')
+        end
+    elseif line:find('difficulty level', 1, true) then
+        dbg('htmb: difficulty line did not parse: %s', line)
     end
 end)
 
@@ -1367,6 +1378,15 @@ function pdl_estimated_ratio(mob_id)
                     and windower.ffxi.get_mob_by_id(mob_id)
         local seed = smb and PDL_NM_DEFENSE[smb.name]
         if seed then
+            -- Late-apply the last difficulty announcement: evaluating an
+            -- HTMB NM makes the remembered tier win over whatever
+            -- survived the battlefield zone-in.
+            if seed.htmb and pdl_htmb_seen and pdl_htmb_seen ~= pdl_htmb_tier then
+                pdl_htmb_tier = pdl_htmb_seen
+                windower.add_to_chat(8, '[PDLTracker] HTMB tier (late-applied): '
+                    ..pdl_htmb_tier:upper()..' (def basis '
+                    ..HTMB_TIER_DEF[pdl_htmb_tier]..')')
+            end
             local sbase = seed.htmb
                           and ((pdl_htmb_tier == 'vd' and seed.vd)
                                or HTMB_TIER_DEF[pdl_htmb_tier])
@@ -1464,6 +1484,7 @@ windower.register_event('addon command', function(cmd, a1, a2)
         local t = a1 and a1:lower()
         if t and HTMB_TIER_DEF[t] then
             pdl_htmb_tier = t
+            pdl_htmb_seen = nil   -- manual override beats the remembered line
         end
         windower.add_to_chat(8, '[PDLTracker] HTMB tier: '
             .. pdl_htmb_tier:upper()
