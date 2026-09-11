@@ -3,7 +3,7 @@
 A small draggable window for Windower that answers one question in real time:
 **"is it PDL gear time?"**
 
-`PDL: 4.77` in **green** = your estimated cRatio is past your job's pDIF cap
+`pDIF: 4.77` in **green** = your estimated cRatio is past your job's pDIF cap
 threshold — swap to your Physical Damage Limit+ WS sets. **White** = you're
 under it — attack/WSD gear wins. The addon only measures and displays; you
 toggle your own sets.
@@ -11,6 +11,9 @@ toggle your own sets.
 ## Install
 Drop the `PDLTracker` folder into `Windower/addons/` and `//lua load pdltracker`.
 No configuration required — it starts working on your first engaged target.
+Trivial targets (Too Weak / Incredibly Easy Prey) just read `pDIF: Too Weak`
+in green — you are past cap by definition. NMs in the built-in defense
+table are resolved by name and are never auto-`/check`ed.
 
 ## What it does under the hood
 - Reads your **actual attack** from the game's char-stats packets (buffed,
@@ -56,11 +59,13 @@ No configuration required — it starts working on your first engaged target.
 | Command | Effect |
 |---|---|
 | `//pdl` | toggle the window |
-| `//pdl save` | save the window's current position |
+| `//pdl save` | save the window position + Vengeance rank |
 | `//pdl base <n>` | static anchor ratio for unchecked/ITG mobs (default 1.10) |
 | `//pdl atk <n>` | your buffless attack (fallback scale; default 1500) |
-| `//pdl v <0-25>` | Sheol Gaol Vengeance rank (session-local; default 25) |
+| `//pdl v <0-25>` | Sheol Gaol Vengeance rank (default 25; `//pdl save` persists) |
 | `//pdl htmb <ve\|e\|n\|d\|vd>` | HTMB difficulty tier (default vd; auto-set on battlefield entry) |
+| `//pdl seed <n>` | pin the targeted NM's base defense (persists) |
+| `//pdl headroom` | toggle the signed %-vs-threshold readout (default on) |
 | `//pdl status` | echo the full decomposition for your current target |
 | `//pdl debug` | packet tracing on/off |
 
@@ -78,9 +83,12 @@ For endgame NMs that check Impossible to Gauge, the tracker carries a
 name-keyed seed table (PDL_NM_DEFENSE, 50 entries: Sheol Gaol, Sortie,
 Omen, Dynamis Divergence, HELM/Kouryu/Warder of Courage, HTMB VD trio)
 built on a level-scaling model (Arebati V0 = 1320 tested, 55 defense per
-level). When a seeded name returns the ITG check verdict, the estimate
-switches to [seed] mode: def = base + per_v x Vengeance. Set your Gaol
-Vengeance rank with //pdl v <0-25> (session-local, defaults V25).
+level). A seeded name resolves by NAME alone — no /check is issued and no
+gauge verdict is needed; the estimate runs in [seed] mode:
+def = base + per_v x Vengeance. Set your Gaol
+Vengeance rank with //pdl v <0-25> (defaults V25; //pdl save persists it).
+Pin a measured base defense for the targeted NM with //pdl seed <def> --
+pins persist in settings and override the shipped rows on load.
 Offensive-geomancy nerfs live in a single name-keyed table (GEO_NERF):
 Gaol Atonement NMs 0.15, Sortie basement bosses 0.50, Dynamis Divergence
 wave bosses 0.50 — Frailty booked on those names is scaled to match the

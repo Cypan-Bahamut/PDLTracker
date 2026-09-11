@@ -33,7 +33,9 @@ _addon.command = 'pdl'
 --   //pdl v <0-25>   Sheol Gaol Vengeance rank (session-local, default 25)
 --   //pdl htmb <t>   HTMB difficulty tier: ve|e|n|d|vd (default vd;
 --                    auto-set on battlefield entry)
---   //pdl save       save the current window position
+--   //pdl seed <n>   pin the targeted NM's base defense (saved to settings)
+--   //pdl headroom   toggle the signed %-vs-threshold readout (default on)
+--   //pdl save       save window position + Vengeance rank
 --   //pdl status     echo full decomposition for the current target
 --   //pdl debug      toggle packet tracing
 --------------------------------------------------------------------------------
@@ -56,9 +58,12 @@ defaults.base_attack = 1500
 defaults.aria_pdl = 0.195
 defaults.autocheck = true
 defaults.debug = false
+defaults.vengeance = 25    -- persisted by //pdl save
+defaults.seeds = {}        -- //pdl seed pins: [name] = { base=n, per_v=n }
+defaults.headroom = true   -- signed %-vs-threshold on the HUD (//pdl headroom)
 
 settings = config.load(defaults)
-local hud = texts.new('PDL: --', settings)
+local hud = texts.new('pDIF: --', settings)
 
 -- Live player getter (defined first: used throughout the tracker below)
 local function P() return windower.ffxi.get_player() end
@@ -635,6 +640,14 @@ local PDL_NM_DEFENSE = {
     ['Locus Ghost Crab'] = { base = 1446, level = 137, per_v = 0,
                     kind = 'measured', src = 'measured in-game 1413-1479' },
 }
+-- //pdl seed pins saved in settings override the shipped seeds on load.
+for nm, row in pairs(settings.seeds or {}) do
+    if type(row) == 'table' and tonumber(row.base) then
+        PDL_NM_DEFENSE[nm] = { base = tonumber(row.base),
+                               per_v = tonumber(row.per_v) or 0,
+                               kind = 'measured', src = 'pdl seed' }
+    end
+end
 -- HTMB tier defense (ladder model 2026-08-28): this table serves the hard trio
 -- (Cloud of Darkness, Shinryu, Lilith -- the only htmb seeds). Menu-read
 -- levels VE 119 / E 124 / N 129; D 134 / VD 139 assumed (+5 spacing).
@@ -646,7 +659,7 @@ local HTMB_TIER_DEF = { ve = 1052, e = 1086, n = 1155, d = 1293, vd = 1540 }
 local pdl_htmb_tier = 'vd'   -- //pdl htmb <ve|e|n|d|vd>, defaults VD (project ruling)
 local pdl_htmb_seen = nil    -- last parsed difficulty announcement; late-applied
                              -- when an HTMB NM is evaluated (manual htmb clears it)
-local pdl_vengeance = 25   -- defaults V25 (project ruling)   -- //pdl v <n> (Gaol Vengeance rank; session-local)
+local pdl_vengeance = settings.vengeance or 25   -- //pdl v <n>; //pdl save persists
 
 local function pdl_actor_in_party(id)
     -- true = confirmed party/alliance member; false = confirmed outsider;
@@ -1179,11 +1192,27 @@ windower.register_event('prerender', function()
             local ht = pdl_target_mob()
             if ht then
                 local est = pdl_estimated_ratio(ht.id)
-                hud:text(('PDL: %.2f'):format(est))
-                if est >= pdl_threshold() then
+                local hm = mobs[ht.id]
+                if hm and hm.cal and hm.cal.rating
+                   and hm.cal.rating <= 2 then
+                    -- Too Weak / Incredibly Easy Prey: trivial content is
+                    -- always past cap; say so plainly.
+                    hud:text('pDIF: Too Weak')
                     hud:color(0, 255, 0)
                 else
-                    hud:color(255, 255, 255)
+                    local thr = pdl_threshold()
+                    if settings.headroom then
+                        -- headroom: signed % vs the cap threshold
+                        hud:text(('pDIF: %.2f (%+.0f%%)')
+                            :format(est, (est / thr - 1) * 100))
+                    else
+                        hud:text(('pDIF: %.2f'):format(est))
+                    end
+                    if est >= thr then
+                        hud:color(0, 255, 0)
+                    else
+                        hud:color(255, 255, 255)
+                    end
                 end
                 hud:show()
             else
@@ -1210,7 +1239,10 @@ windower.register_event('prerender', function()
                    and now - m.check_pending > pdl_config.check_timeout then
                     m.check_pending = nil
                 end
+                -- Seeded NM by NAME: defense comes from PDL_NM_DEFENSE, so
+                -- never auto-/check it at all.
                 if not m.cal and not m.gauge_proof and not m.check_pending
+                   and not (t.name and PDL_NM_DEFENSE[t.name])
                    and (m.check_tries or 0) < pdl_config.autocheck_tries then
                     m.check_tries = (m.check_tries or 0) + 1
                     m.check_pending = now
@@ -1367,36 +1399,45 @@ function pdl_estimated_ratio(mob_id)
     local assumed_def = pdl_base_attack() / settings.base_ratio + pdl_protect_flat(mob_id)
     local model_est = A / (assumed_def * eff)
     local est, mode
-    if m and m.cal then
+    -- Seeded NMs resolve by NAME alone: no /check is ever auto-issued for
+    -- them and no gauge verdict is required -- the seed IS the anchor.
+    local smb = windower.ffxi.get_mob_by_id
+                and windower.ffxi.get_mob_by_id(mob_id)
+    local seed = smb and PDL_NM_DEFENSE[smb.name]
+    if seed then
+        -- Late-apply the last difficulty announcement: evaluating an
+        -- HTMB NM makes the remembered tier win over whatever
+        -- survived the battlefield zone-in.
+        if seed.htmb and pdl_htmb_seen and pdl_htmb_seen ~= pdl_htmb_tier then
+            pdl_htmb_tier = pdl_htmb_seen
+            windower.add_to_chat(8, '[PDLTracker] HTMB tier (late-applied): '
+                ..pdl_htmb_tier:upper()..' (def basis '
+                ..HTMB_TIER_DEF[pdl_htmb_tier]..')')
+        end
+        local sbase = seed.htmb
+                      and ((pdl_htmb_tier == 'vd' and seed.vd)
+                           or HTMB_TIER_DEF[pdl_htmb_tier])
+                      or seed.base
+        local sdef = sbase + (seed.per_v or 0) * pdl_vengeance
+                     + pdl_protect_flat(mob_id)
+        -- One-shot seed announcement per mob: the first evaluation of a
+        -- seeded NM says what anchor is in play.
+        local me = mob_entry(mob_id)
+        if not me.seed_echoed then
+            me.seed_echoed = true
+            windower.add_to_chat(8, '[PDLTracker] seed: '..(smb.name or '?')
+                ..' def '..string.format('%d', sdef)
+                ..((seed.per_v or 0) > 0 and (' V'..pdl_vengeance) or '')
+                ..(seed.htmb and (' tier '..pdl_htmb_tier:upper()) or ''))
+        end
+        est, mode = A / (sdef * eff), 'seed'
+    elseif m and m.cal then
         local floor_est = A / ((m.cal.def_hi + pdl_protect_flat(mob_id)) * eff)
         est = math.max(floor_est, model_est)
         mode = measured and 'cal' or 'cal~'
     elseif m and m.gauge_proof then
-        -- Seeded ITG NMs: name-keyed base defense
-        -- from PDL_NM_DEFENSE, Vengeance-scaled, replaces the blind anchor.
-        local smb = windower.ffxi.get_mob_by_id
-                    and windower.ffxi.get_mob_by_id(mob_id)
-        local seed = smb and PDL_NM_DEFENSE[smb.name]
-        if seed then
-            -- Late-apply the last difficulty announcement: evaluating an
-            -- HTMB NM makes the remembered tier win over whatever
-            -- survived the battlefield zone-in.
-            if seed.htmb and pdl_htmb_seen and pdl_htmb_seen ~= pdl_htmb_tier then
-                pdl_htmb_tier = pdl_htmb_seen
-                windower.add_to_chat(8, '[PDLTracker] HTMB tier (late-applied): '
-                    ..pdl_htmb_tier:upper()..' (def basis '
-                    ..HTMB_TIER_DEF[pdl_htmb_tier]..')')
-            end
-            local sbase = seed.htmb
-                          and ((pdl_htmb_tier == 'vd' and seed.vd)
-                               or HTMB_TIER_DEF[pdl_htmb_tier])
-                          or seed.base
-            local sdef = sbase + (seed.per_v or 0) * pdl_vengeance
-                         + pdl_protect_flat(mob_id)
-            est, mode = A / (sdef * eff), 'seed'
-        else
-            est, mode = model_est, 'itg-static'
-        end
+        -- ITG verdict on an UNSEEDED name: blind static anchor.
+        est, mode = model_est, 'itg-static'
     else
         est, mode = model_est, 'static'
     end
@@ -1479,7 +1520,27 @@ windower.register_event('addon command', function(cmd, a1, a2)
             pdl_vengeance = math.max(0, math.min(25, n))
         end
         windower.add_to_chat(8, '[PDLTracker] Vengeance: V' .. pdl_vengeance
-            .. (n and '' or ' (usage: //pdl v <0-25>)'))
+            .. (n and ' (//pdl save persists)' or ' (usage: //pdl v <0-25>)'))
+    elseif cmd == 'seed' and tonumber(a1) then
+        local t = pdl_target_mob()
+        if t and t.name then
+            local prev = PDL_NM_DEFENSE[t.name]
+            local row = { base = math.floor(tonumber(a1)),
+                          per_v = (prev and prev.per_v) or 0 }
+            PDL_NM_DEFENSE[t.name] = { base = row.base, per_v = row.per_v,
+                                       kind = 'measured', src = 'pdl seed' }
+            settings.seeds[t.name] = row
+            config.save(settings)
+            windower.add_to_chat(8, ('[PDLTracker] seed: %s base %d '
+                ..'(per_v %d), saved'):format(t.name, row.base, row.per_v))
+        else
+            windower.add_to_chat(8, '[PDLTracker] seed: target the NM first')
+        end
+    elseif cmd == 'headroom' then
+        settings.headroom = not settings.headroom
+        config.save(settings)
+        windower.add_to_chat(8, '[PDLTracker] headroom: '
+            .. (settings.headroom and 'On' or 'Off'))
     elseif cmd == 'htmb' then
         local t = a1 and a1:lower()
         if t and HTMB_TIER_DEF[t] then
@@ -1495,6 +1556,7 @@ windower.register_event('addon command', function(cmd, a1, a2)
         if x and y then
             settings.pos.x, settings.pos.y = x, y
         end
+        settings.vengeance = pdl_vengeance
         config.save(settings)
         windower.add_to_chat(8, ('[PDLTracker] position saved: %d,%d')
             :format(settings.pos.x, settings.pos.y))
@@ -1513,6 +1575,6 @@ windower.register_event('addon command', function(cmd, a1, a2)
             windower.add_to_chat(8, '[PDLTracker] no target')
         end
     else
-        windower.add_to_chat(8, '[PDLTracker] //pdl | //pdl save | //pdl base <n> | //pdl atk <n> | //pdl v <0-25> | //pdl htmb <ve|e|n|d|vd> | //pdl status | //pdl debug')
+        windower.add_to_chat(8, '[PDLTracker] //pdl | //pdl save | //pdl base <n> | //pdl atk <n> | //pdl v <0-25> | //pdl htmb <ve|e|n|d|vd> | //pdl seed <def> | //pdl headroom | //pdl status | //pdl debug')
     end
 end)
