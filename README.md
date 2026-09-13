@@ -65,6 +65,7 @@ table are resolved by name and are never auto-`/check`ed.
 | `//pdl v <0-25>` | Sheol Gaol Vengeance rank (default 25; `//pdl save` persists) |
 | `//pdl htmb <ve\|e\|n\|d\|vd>` | HTMB difficulty tier (default vd; auto-set on battlefield entry) |
 | `//pdl seed <n>` | pin the targeted NM's base defense (persists) |
+| `//pdl trust <pts>` | your trust magic skill points (alter-ego primers; persists) |
 | `//pdl headroom` | toggle the signed %-vs-threshold readout (default on) |
 | `//pdl status` | echo the full decomposition for your current target |
 | `//pdl debug` | packet tracing on/off |
@@ -100,6 +101,16 @@ difficulty level: ...") with //pdl htmb <ve|e|n|d|vd> as the manual
 override; the ladder rescales Cloud of Darkness, Shinryu, and Lilith
 (VE 1052 / E 1086 / N 1155 / D 1293 / VD 1540, from menu levels
 119/124/129 with D 134 / VD 139 assumed; tier defaults to VD).
+
+## Trust magic skill points
+
+Alter-ego primer points raise trust buff potency. Set yours with
+`//pdl trust <pts>` (persists) and the tracker rescales its trust-sourced
+numbers: Sylvie Indi-Fury (96 → 107/256 at the current 60 cap), Sylvie
+Entrust Indi-Frailty (32 → 36/256), and trust-bard Minuets (Ulmia/Joachim
+are recognized by caster name — Minuet V 104 → 123, IV capped at 112).
+Values between the measured 0/50/60 anchors interpolate per point, and
+points past 60 extrapolate so future cap raises keep working. Default 0.
 
 ## Support
 

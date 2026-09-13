@@ -61,6 +61,7 @@ defaults.debug = false
 defaults.vengeance = 25    -- persisted by //pdl save
 defaults.seeds = {}        -- //pdl seed pins: [name] = { base=n, per_v=n }
 defaults.headroom = true   -- signed %-vs-threshold on the HUD (//pdl headroom)
+defaults.trust_pts = 0     -- //pdl trust <n>: your trust magic skill points
 
 settings = config.load(defaults)
 local hud = texts.new('pDIF: --', settings)
@@ -165,8 +166,9 @@ local pdl_config = {
     -- Fallbacks when the buff is up but no roll packet was seen (zoned in):
     att_chaos_player  = 0.50,
     att_chaos_qultada = 0.25,    -- ASSUMED Qultada (no Crooked Cards/gear)
-    att_fury    = 0.373,         -- VERIFIED Sylvie Indi-Fury +37.3%
-                                 -- (FFXIclopedia Trust: Sylvie (UC));
+    att_fury    = 96/256,        -- Sylvie Indi-Fury 0-pt base (96/256);
+                                 -- scaled at load by the trust formula
+                                 -- (//pdl trust <pts>);
                                  -- raise for an Idris GEO
     -- Minuets are now IDENTIFIED per cast and tracked individually.
     -- Flat attack per tier, full-potency REMA bard per design:
@@ -175,6 +177,11 @@ local pdl_config = {
     -- proportional estimates. Untracked minuet buff instances (missed the
     -- cast) are assumed tier V.
     att_minuet_tier   = { [1]=60, [2]=100, [3]=150, [4]=220, [5]=250 },
+    -- Trust-bard minuets (Ulmia/Joachim by caster name; trusts never run
+    -- player-REMA numbers). 0-pt bases; V scaled by the trust formula,
+    -- IV capped at 112. Unlisted tiers fall back to att_minuet_tier.
+    att_minuet_trust  = { [4]=112, [5]=104 },
+    trust_bards       = { ['Ulmia']=true, ['Joachim']=true },
     soul_voice_mult   = 2.0,     -- Soul Voice doubles song potency
     soul_voice_window = 180,     -- SV look-back window (sec); VERIFY duration
     song_dur_default  = 360,     -- minuet track timer fallback (REMA bard);
@@ -189,7 +196,8 @@ local pdl_config = {
                                  -- (bg-wiki: 14.8% skill + 27% Idris)
     frailty_player_dur = 360,    -- ASSUMED: 180 base (resources Indi-Frailty)
                                  -- x2 for a full-duration-geared GEO
-    frailty_sylvie_pct = 0.125,  -- VERIFIED Sylvie Entrust Indi-Frailty
+    frailty_sylvie_pct = 32/256, -- Sylvie Entrust Indi-Frailty 0-pt base;
+                                 -- scaled at load by the trust formula
     frailty_sylvie_dur = 360,    -- bg-wiki Sylvie (UC): 'Enhanced Indicolure duration
                                  -- (6 minutes total, includes Entrust effects)'
 
@@ -841,7 +849,11 @@ local function on_action(act)
             local tier  = MINUET_SPELLS[act.param]
             local svon  = sv_actors[act.actor_id]
                           and sv_actors[act.actor_id] > os.clock()
-            local value = pdl_config.att_minuet_tier[tier]
+            local mcaster = windower.ffxi.get_mob_by_id
+                            and windower.ffxi.get_mob_by_id(act.actor_id)
+            local value = (mcaster and pdl_config.trust_bards[mcaster.name]
+                           and pdl_config.att_minuet_trust[tier]
+                           or pdl_config.att_minuet_tier[tier])
                           * (svon and pdl_config.soul_voice_mult or 1)
             local nowc  = os.clock()
             local found = false
@@ -1498,6 +1510,33 @@ end
 --------------------------------------------------------------------------------
 -- Addon commands
 --------------------------------------------------------------------------------
+-- Trust magic skill points (JP alter-ego allocation table, 2026-09-13):
+-- primer points raise trust buff potency. Anchors: 0 = bg-wiki base,
+-- 50 = the old cap, 60 = the current cap; linear per point between
+-- anchors, past 60 extrapolated on the 50->60 per-point rate so future
+-- cap raises keep working.
+--   Sylvie Indi-Fury        96 -> 105 -> 107 /256
+--   Sylvie Entrust Frailty  32 -> 36  -> 36  /256
+--   Trust Minuet V         104 -> 120 -> 123 flat attack (IV capped 112)
+local TRUST_ANCHORS = {
+    fury    = { [0]=96,  [50]=105, [60]=107 },
+    frailty = { [0]=32,  [50]=36,  [60]=36  },
+    m5      = { [0]=104, [50]=120, [60]=123 },
+}
+local function trust_interp(a, pts)
+    if pts <= 0 then return a[0] end
+    local lo, hi, span = 0, 50, 50
+    if pts > 50 then lo, hi, span = 50, 60, 10 end   -- >60 extrapolates
+    return math.floor(a[lo] + (a[hi] - a[lo]) * (pts - lo) / span + 0.5)
+end
+local function pdl_apply_trust()
+    local p = settings.trust_pts or 0
+    pdl_config.att_fury            = trust_interp(TRUST_ANCHORS.fury, p) / 256
+    pdl_config.frailty_sylvie_pct  = trust_interp(TRUST_ANCHORS.frailty, p) / 256
+    pdl_config.att_minuet_trust[5] = trust_interp(TRUST_ANCHORS.m5, p)
+end
+pdl_apply_trust()
+
 windower.register_event('addon command', function(cmd, a1, a2)
     cmd = cmd and cmd:lower() or ''
     if cmd == '' then
@@ -1535,6 +1574,21 @@ windower.register_event('addon command', function(cmd, a1, a2)
                 ..'(per_v %d), saved'):format(t.name, row.base, row.per_v))
         else
             windower.add_to_chat(8, '[PDLTracker] seed: target the NM first')
+        end
+    elseif cmd == 'trust' then
+        local pts = tonumber(a1)
+        if pts and pts >= 0 and pts <= 120 then
+            settings.trust_pts = math.floor(pts)
+            pdl_apply_trust()
+            config.save(settings)
+            windower.add_to_chat(8, ('[PDLTracker] trust magic skill: %d pts'
+                .. ' (Sylvie Fury %.1f%%, Entrust Frailty -%.1f%%, Minuet V +%d)')
+                :format(settings.trust_pts, pdl_config.att_fury * 100,
+                        pdl_config.frailty_sylvie_pct * 100,
+                        pdl_config.att_minuet_trust[5]))
+        else
+            windower.add_to_chat(8, '[PDLTracker] //pdl trust <points> — your'
+                .. ' trust magic skill allocation (0-60 today; higher accepted)')
         end
     elseif cmd == 'headroom' then
         settings.headroom = not settings.headroom
@@ -1575,6 +1629,6 @@ windower.register_event('addon command', function(cmd, a1, a2)
             windower.add_to_chat(8, '[PDLTracker] no target')
         end
     else
-        windower.add_to_chat(8, '[PDLTracker] //pdl | //pdl save | //pdl base <n> | //pdl atk <n> | //pdl v <0-25> | //pdl htmb <ve|e|n|d|vd> | //pdl seed <def> | //pdl headroom | //pdl status | //pdl debug')
+        windower.add_to_chat(8, '[PDLTracker] //pdl | //pdl save | //pdl base <n> | //pdl atk <n> | //pdl v <0-25> | //pdl htmb <ve|e|n|d|vd> | //pdl seed <def> | //pdl trust <pts> | //pdl headroom | //pdl status | //pdl debug')
     end
 end)
