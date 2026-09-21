@@ -8,6 +8,13 @@ threshold — swap to your Physical Damage Limit+ WS sets. **White** = you're
 under it — attack/WSD gear wins. The addon only measures and displays; you
 toggle your own sets.
 
+<img width="142" height="29" alt="Screenshot 2026-09-20 124337" src="https://github.com/user-attachments/assets/e5830323-e861-4b71-96cf-86acb0ebc9d7" />
+
+|
+|
+
+<img width="137" height="24" alt="image" src="https://github.com/user-attachments/assets/8e4dd6b8-e93d-4181-8416-800d594ef7e5" />
+
 ## Install
 Drop the `PDLTracker` folder into `Windower/addons/` and `//lua load pdltracker`.
 No configuration required — it starts working on your first engaged target.
