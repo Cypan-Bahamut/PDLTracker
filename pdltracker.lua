@@ -1,6 +1,6 @@
 _addon.name    = 'PDL Tracker'
 _addon.author  = 'Cypan (Bahamut)'
-_addon.version = '1.2.0.0'
+_addon.version = '1.3.0.0'
 _addon.command = 'pdl'
 
 --------------------------------------------------------------------------------
@@ -363,6 +363,9 @@ do
                            ['Valor Minuet V']=5 }
     for id, sp in pairs(res.spells) do
         if     sp.en == 'Dia'     then DIA_TIER[id] = 1
+        elseif sp.en == 'Diaga'   then DIA_TIER[id] = 1
+                                  -- AoE Dia; same -104/1024 defense down and
+                                  -- 60s base as Dia I (bg-wiki)
         elseif sp.en == 'Dia II'  then DIA_TIER[id] = 2
         elseif sp.en == 'Dia III' then DIA_TIER[id] = 3
         elseif sp.en == 'Bio' or sp.en == 'Bio II' or sp.en == 'Bio III' then
@@ -624,7 +627,7 @@ local PDL_NM_DEFENSE = {
     ['Shinryu']           = { htmb = true, vd = 1540, base = 1540, level = 139, per_v = 0, kind = 'modeled', src = 'level model VD 139' },
     ['Lilith']            = { htmb = true, vd = 1540, base = 1540, level = 139, per_v = 0, kind = 'modeled', src = 'level model VD 139' },
 
-    -- Sortie (project ruling 2026-08-23: A-D level 135, E-H 145, Aminon 149)
+    -- Sortie (project ruling 2026-08-23: A-D level 135, E-H 145, Aminon 150)
     ['Ghatjot']   = { base = 1320, level = 135, per_v = 0, kind = 'modeled',
                     src = 'level model, Sortie A' },
     ['Leshonn']   = { base = 1320, level = 135, per_v = 0, kind = 'modeled',
@@ -641,8 +644,8 @@ local PDL_NM_DEFENSE = {
                     src = 'level model, Sortie G' },
     ['Aita']      = { base = 1870, level = 145, per_v = 0, kind = 'modeled',
                     src = 'level model, Sortie H' },
-    ['Aminon']    = { base = 2090, level = 149, per_v = 0, kind = 'modeled',
-                    src = 'level model; Incessant Void mode not modeled' },
+    ['Aminon']    = { base = 2145, level = 150, per_v = 0, kind = 'modeled',
+                    src = 'level model 150; hard mode (To the deepest dark) not modeled' },
 
     -- Open world Locus camps
     ['Locus Ghost Crab'] = { base = 1446, level = 137, per_v = 0,
@@ -733,70 +736,87 @@ local function on_action(act)
     -- Defense Down landing on the MOB from any actor: BLU spells, pet
     -- moves, bolt/weapon procs. (WS-family stays on its precise landed-
     -- message path: 185/187 are not in these sets, so no double-apply.)
-    if (MSG_GAIN[a1.message] or MSG_AFFLICT[a1.message])
-       and a1.param == DEFDOWN_STATUS
-       and t1.id ~= act.actor_id
-       and not party_jobs[t1.id] and t1.id ~= player_id then
-        local nm, ent
-        if act.category == 4 then
-            local sp = res.spells and res.spells[act.param]
-            nm = sp and sp.en
-            ent = nm and DEFDOWN_SPELLS[nm]
-        else
-            local ma = res_ma[act.param]
-                       or (res.job_abilities and res.job_abilities[act.param])
-            nm = ma and ma.en
-            ent = nm and DEFDOWN_PETMOVES[nm]
+    -- AoE-aware: every packet target is checked against its OWN action row,
+    -- so an AoE spell/move books each mob it landed on, not only targets[1].
+    do
+        local matched = false
+        for ti = 1, #act.targets do
+            local t = act.targets[ti]
+            local a = t.actions and t.actions[1]
+            if a and (MSG_GAIN[a.message] or MSG_AFFLICT[a.message])
+               and a.param == DEFDOWN_STATUS
+               and t.id ~= act.actor_id
+               and not party_jobs[t.id] and t.id ~= player_id then
+                local nm, ent
+                if act.category == 4 then
+                    local sp = res.spells and res.spells[act.param]
+                    nm = sp and sp.en
+                    ent = nm and DEFDOWN_SPELLS[nm]
+                else
+                    local ma = res_ma[act.param]
+                               or (res.job_abilities and res.job_abilities[act.param])
+                    nm = ma and ma.en
+                    ent = nm and DEFDOWN_PETMOVES[nm]
+                end
+                local pct = (ent and ent[1]) or pdl_config.defdown_generic_pct
+                local dur = (ent and ent[2]) or pdl_config.defdown_generic_dur
+                local m = mob_entry(t.id)
+                if not (m.defdown and live(m.defdown) and m.defdown.pct >= pct) then
+                    m.defdown = { name = nm or 'proc', pct = pct,
+                                  status = DEFDOWN_STATUS,
+                                  expires = os.clock() + dur }
+                    m.defup = nil
+                    dbg('defdown landed on %d: %s -%d%% (%ds)',
+                        t.id, nm or 'proc', pct * 100, dur)
+                end
+                matched = true
+            end
         end
-        local pct = (ent and ent[1]) or pdl_config.defdown_generic_pct
-        local dur = (ent and ent[2]) or pdl_config.defdown_generic_dur
-        local m = mob_entry(t1.id)
-        if not (m.defdown and live(m.defdown) and m.defdown.pct >= pct) then
-            m.defdown = { name = nm or 'proc', pct = pct,
-                          status = DEFDOWN_STATUS,
-                          expires = os.clock() + dur }
-            m.defup = nil
-            dbg('defdown landed on %d: %s -%d%% (%ds)',
-                t1.id, nm or 'proc', pct * 100, dur)
-        end
-        return
+        if matched then return end
     end
 
-    -- Enemy self-buffs: Defense Boost / Protect gains on the mob
-    if MSG_GAIN[a1.message] and t1.id == act.actor_id
-       and not party_jobs[t1.id] and t1.id ~= player_id then
-        if a1.param == BUFF_DEFBOOST then
-            local ma = res_ma[act.param]
-            local mname = ma and ma.en
-            local pct = (mname and pdl_config.defup_moves[mname])
-                        or pdl_config.defup_default_pct
-            local m = mob_entry(t1.id)
-            m.defup = { pct = pct,
-                        expires = os.clock() + pdl_config.defup_default_dur }
-            -- Defense Boost OVERWRITES a Defense Down effect (149 family
-            -- only -- Dia/steps/Frailty are unaffected) and vice versa
-            m.defdown = nil
-            dbg('defup on %d: %s +%d%%', t1.id, mname or 'unknown', pct * 100)
-            return
-        elseif a1.param == DEFDOWN_STATUS then
-            -- Rage-type self defense-down: the mob lowered its own defense
-            local ma = res_ma[act.param]
-            local mname = ma and ma.en
-            local pct = (mname and pdl_config.selfdefdown_moves[mname])
-                        or pdl_config.selfdefdown_default
-            local m = mob_entry(t1.id)
-            m.defdown = { name = mname or 'self', pct = pct, status = DEFDOWN_STATUS,
-                          expires = os.clock() + pdl_config.defup_default_dur }
-            m.defup = nil
-            dbg('self-defdown on %d: %s -%d%%', t1.id, mname or 'unknown', pct * 100)
-            return
-        elseif a1.param == BUFF_PROTECT then
-            local m = mob_entry(t1.id)
-            m.protect = { flat = pdl_config.protect_flat[act.param] or 0,
-                          expires = os.clock() + pdl_config.protect_dur }
-            dbg('protect on %d: spell %s flat %d', t1.id,
-                tostring(act.param), m.protect.flat)
-            return
+    -- Enemy self-buffs: Defense Boost / Protect gains on the mob.
+    -- AoE-aware: the caster's own row is matched wherever it sits in the
+    -- target list (an AoE self-move lists pack-mates first at times);
+    -- scope stays caster-only, as before.
+    for ti = 1, #act.targets do
+        local t = act.targets[ti]
+        local a = t.actions and t.actions[1]
+        if t.id == act.actor_id and a and MSG_GAIN[a.message]
+           and not party_jobs[t.id] and t.id ~= player_id then
+            if a.param == BUFF_DEFBOOST then
+                local ma = res_ma[act.param]
+                local mname = ma and ma.en
+                local pct = (mname and pdl_config.defup_moves[mname])
+                            or pdl_config.defup_default_pct
+                local m = mob_entry(t.id)
+                m.defup = { pct = pct,
+                            expires = os.clock() + pdl_config.defup_default_dur }
+                -- Defense Boost OVERWRITES a Defense Down effect (149 family
+                -- only -- Dia/steps/Frailty are unaffected) and vice versa
+                m.defdown = nil
+                dbg('defup on %d: %s +%d%%', t.id, mname or 'unknown', pct * 100)
+                return
+            elseif a.param == DEFDOWN_STATUS then
+                -- Rage-type self defense-down: the mob lowered its own defense
+                local ma = res_ma[act.param]
+                local mname = ma and ma.en
+                local pct = (mname and pdl_config.selfdefdown_moves[mname])
+                            or pdl_config.selfdefdown_default
+                local m = mob_entry(t.id)
+                m.defdown = { name = mname or 'self', pct = pct, status = DEFDOWN_STATUS,
+                              expires = os.clock() + pdl_config.defup_default_dur }
+                m.defup = nil
+                dbg('self-defdown on %d: %s -%d%%', t.id, mname or 'unknown', pct * 100)
+                return
+            elseif a.param == BUFF_PROTECT then
+                local m = mob_entry(t.id)
+                m.protect = { flat = pdl_config.protect_flat[act.param] or 0,
+                              expires = os.clock() + pdl_config.protect_dur }
+                dbg('protect on %d: spell %s flat %d', t.id,
+                    tostring(act.param), m.protect.flat)
+                return
+            end
         end
     end
 
@@ -875,15 +895,27 @@ local function on_action(act)
         return
     end
 
-    -- Spells (Debuffed: category 4 + landed messages)
-    if act.category == 4 and SPELL_LAND_MSGS[a1.message] then
+    -- Spells (Debuffed: category 4 + landed messages). AoE-aware: Dia/Bio
+    -- family (incl. Diaga) books every packet target whose OWN action row
+    -- carries a landed message -- a resist on targets[1] no longer hides
+    -- lands on the rest of the pack.
+    if act.category == 4 and (DIA_TIER[act.param] or BIO_IDS[act.param]) then
         local sid = act.param
-        if DIA_TIER[sid] then
-            apply_dia(t1.id, DIA_TIER[sid], act.actor_id)
-        elseif BIO_IDS[sid] then
-            apply_bio(t1.id)
+        for ti = 1, #act.targets do
+            local t = act.targets[ti]
+            local a = t.actions and t.actions[1]
+            if a and SPELL_LAND_MSGS[a.message] then
+                if DIA_TIER[sid] then
+                    apply_dia(t.id, DIA_TIER[sid], act.actor_id)
+                else
+                    apply_bio(t.id)
+                end
+            end
         end
         return
+    end
+    if act.category == 4 and SPELL_LAND_MSGS[a1.message] then
+        return   -- other landed spells: nothing below handles category 4
     end
 
     -- Defense Down WS (category 3). Landed-message gate: 185 = deals damage,
@@ -892,9 +924,19 @@ local function on_action(act)
     if act.category == 3 then
         local ws  = res.weapon_skills[act.param]
         local def = ws and WS_DEFDOWN[ws.en]
-        if def and (a1.message == 185 or a1.message == 187) then
+        if def then
+            -- AoE-aware: each target books off its own landed message
             local tp = estimate_tp(act.actor_id)
-            apply_defdown(t1.id, ws.en, def.pct, def.dur(tp))
+            for ti = 1, #act.targets do
+                local t = act.targets[ti]
+                local a = t.actions and t.actions[1]
+                if a and (a.message == 185 or a.message == 187) then
+                    apply_defdown(t.id, ws.en, def.pct, def.dur(tp))
+                elseif settings.debug and a then
+                    dbg('WS %s msg=%d param=%d (unmatched)', ws.en, a.message,
+                        a.param or -1)
+                end
+            end
         elseif settings.debug and ws then
             dbg('WS %s msg=%d param=%d (unmatched)', ws.en, a1.message,
                 a1.param or -1)
@@ -913,15 +955,25 @@ local function on_action(act)
     if act.category == 11 or act.category == 13 then
         local ma  = res_ma[act.param]
         local def = ma and PET_WS_DEFDOWN[ma.en]
-        if def and (a1.message == 185 or a1.message == 187
-                    or a1.message == 317 or a1.message == 802)
-           and t1.id ~= player_id and not party_jobs[t1.id]
-           and t1.id ~= act.actor_id then
-            apply_defdown(t1.id, ma.en, def.pct, def.dur)
-            return
-        elseif settings.debug and def then
-            dbg('petWS %s cat=%d msg=%d tgt=%d (unmatched)', ma.en,
-                act.category, a1.message, t1.id)
+        if def then
+            -- AoE-aware: pet AoE moves (Swooping Frenzy, Tortoise Stomp)
+            -- book every mob they landed on, each off its own message
+            local booked = false
+            for ti = 1, #act.targets do
+                local t = act.targets[ti]
+                local a = t.actions and t.actions[1]
+                if a and (a.message == 185 or a.message == 187
+                          or a.message == 317 or a.message == 802)
+                   and t.id ~= player_id and not party_jobs[t.id]
+                   and t.id ~= act.actor_id then
+                    apply_defdown(t.id, ma.en, def.pct, def.dur)
+                    booked = true
+                elseif settings.debug and a then
+                    dbg('petWS %s cat=%d msg=%d tgt=%d (unmatched)', ma.en,
+                        act.category, a.message, t.id)
+                end
+            end
+            if booked then return end
         end
     end
 
@@ -971,7 +1023,11 @@ local function on_action(act)
         local ja  = res.job_abilities[act.param]
         local def = ja and JA_DEFDOWN[ja.en]
         if def then
-            apply_defdown(t1.id, ja.en, def.pct, def.dur(0))
+            -- AoE-aware: apply to every packet target (Angon-class JAs are
+            -- single-target today; the loop keeps parity with the other blocks)
+            for ti = 1, #act.targets do
+                apply_defdown(act.targets[ti].id, ja.en, def.pct, def.dur(0))
+            end
         end
         return
     end

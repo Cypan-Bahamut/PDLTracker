@@ -8,13 +8,6 @@ threshold — swap to your Physical Damage Limit+ WS sets. **White** = you're
 under it — attack/WSD gear wins. The addon only measures and displays; you
 toggle your own sets.
 
-<img width="142" height="29" alt="Screenshot 2026-09-20 124337" src="https://github.com/user-attachments/assets/e5830323-e861-4b71-96cf-86acb0ebc9d7" />
-
-|
-|
-
-<img width="137" height="24" alt="image" src="https://github.com/user-attachments/assets/8e4dd6b8-e93d-4181-8416-800d594ef7e5" />
-
 ## Install
 Drop the `PDLTracker` folder into `Windower/addons/` and `//lua load pdltracker`.
 No configuration required — it starts working on your first engaged target.
@@ -28,13 +21,15 @@ table are resolved by name and are never auto-`/check`ed.
   it falls back to a buff model (Chaos Roll by rolled number, Minuets
   identified per cast with Soul Voice detection, party DRK bonus) — the
   window's status mode shows `cal~` during fallback, `cal` once measured.
-- Tracks **enemy defense down**: Dia (+Light Shot), Box Step daze level,
+- Tracks **enemy defense down**: Dia and Diaga (+Light Shot), Box Step daze level,
   Armor Break / Full Break / Shell Crusher / Tachi: Ageha / Angon with
   TP-scaled durations, and damaging pet moves that carry Defense Down —
   automaton Armor Shatterer plus the BST Ready moves (Corrosive Ooze,
   Rhinowrecker, Sweeping Gouge, Swooping Frenzy, Tortoise Stomp), booked
   on landed damage since these emit no additional-effect message —
-  and Frailty (Sylvie-entrust aware). Frailty is
+  and Frailty (Sylvie-entrust aware). AoE spells and moves book every
+  target they land on — each target in the action packet is judged by its
+  own landed/resist message, not just the first. Frailty is
   party-filtered: casts from players outside your party/alliance are
   ignored, and an unidentifiable caster books at Sylvie potency, not
   the full player-GEO (Idris) assumption. On bosses that nerf offensive
